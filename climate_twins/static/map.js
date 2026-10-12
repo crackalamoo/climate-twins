@@ -65,6 +65,11 @@ const SORT = ["-", 0, RANK]; // best ranks draw on top
 
 // Pins whose centres are closer than this (px) would overlap, so the worse one merges into the better.
 const MERGE_PX = 26;
+// Camera moves to a selected match: a brief pan, or for a long way (more than FAR_SCREENS screen
+// widths at the current zoom) a quick fly out and back in, rather than a smear across the map.
+const FOCUS_MS = 500;
+const FAR_SCREENS = 2;
+const FAR_MS = 1000; // a fixed length: flyTo's speed-based ones run 2 s+ on a phone
 
 /** Web Mercator position in [0, 1] world units. */
 function mercator(lon, lat) {
@@ -275,8 +280,9 @@ export class ClimateMap {
   }
 
   /**
-   * Fly to a match (from the list or a pin), at least to zoom 4 and far enough that it stands alone:
-   * no other match within MERGE_PX, so it isn't merged and anything merged into it splits off.
+   * Bring a match (from the list or a pin) into view on a pin of its own, moving as little as
+   * possible: zoom in only as far as it takes to stand alone (no other match within MERGE_PX, so
+   * anything merged into it splits off), and leave the camera be if it's already in view and alone.
    */
   focusMatch(rank) {
     const point = this.points?.find((p) => p.rank === rank);
@@ -284,8 +290,20 @@ export class ClimateMap {
     const zoom = this.map.getZoom();
     const nearest = Math.min(...this.points.filter((p) => p !== point).map((p) => pixelDistance(point, p, zoom)));
     const alone = nearest < MERGE_PX ? zoom + Math.log2(MERGE_PX / Math.max(nearest, 1e-6)) + 0.1 : zoom;
-    const target = Math.min(Math.max(zoom, 4, alone), this.map.getMaxZoom());
-    this.map.flyTo({ center: [point.lon, point.lat], zoom: target, essential: true });
+    const target = Math.min(alone, this.map.getMaxZoom());
+    if (target === zoom && this.inView(point)) return;
+    const camera = { center: [point.lon, point.lat], zoom: target, essential: true };
+    const { lng, lat } = this.map.getCenter();
+    const far = pixelDistance({ xy: mercator(lng, lat) }, point, zoom) > FAR_SCREENS * this.map.getContainer().clientWidth;
+    if (far) this.map.flyTo({ ...camera, duration: FAR_MS });
+    else this.map.easeTo({ ...camera, duration: FOCUS_MS });
+  }
+
+  /** Whether a point is on screen, at least a pin's width in from the edges. */
+  inView({ lon, lat }) {
+    const { x, y } = this.map.project([lon, lat]);
+    const { clientWidth: w, clientHeight: h } = this.map.getContainer();
+    return x >= MERGE_PX && x <= w - MERGE_PX && y >= MERGE_PX && y <= h - MERGE_PX;
   }
 
   handleHover(e) {
