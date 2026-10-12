@@ -58,6 +58,19 @@ class TestLabel:
         assert p["admin1"] not in p["label"]
         assert p["admin1"] in places.search(query)[0]["label"]
 
+    def test_area_is_where_the_point_is_even_when_the_city_is_foreign(self, places: Places):
+        p = places.label_for(15.0, 30.0)
+        assert (p["name"], p["country"]) == ("Portcity", "Saudi Arabia")
+        assert p["area"] == {"admin1": None, "country": "Eritrea"}
+
+    @pytest.mark.parametrize("lat, lon, area", [
+        (45.0, -95.0, {"admin1": "Minnesota", "country": "United States"}),
+        (26.6, 14.0, {"admin1": None, "country": "Libya"}),  # Libya's regions are not shown
+        (25.0, 45.0, {"admin1": None, "country": "Saudi Arabia"}),  # region tier, no admin1
+    ])
+    def test_area_has_the_shown_region_and_the_country(self, places: Places, lat, lon, area):
+        assert places.label_for(lat, lon)["area"] == area
+
     def test_sections_are_searchable_but_never_labels(self, places: Places):
         assert [p["name"] for p in places.search("midtown")] == ["Midtown Heights", "Midtown"]
         assert places.label_for(45.01, -95.01)["name"] == "Midtown"

@@ -279,6 +279,9 @@ GEONAMES_ROWS = [
     # Remote Tibet, for the region vote: the nearest village is miscoded as Hebei.
     ("Wrongcode", "Wrongcode", 33.02, 87.0, "CN", "10", 50, "PPL"),
     *((f"Tibet {k}", f"Tibet {k}", 33.05 + 0.05 * k, 87.0, "CN", "14", 50, "PPL") for k in range(6)),
+    # Across a sea from a big foreign city, around (15, 30): the villages there say ER.
+    *((f"Coast {k}", f"Coast {k}", 15.0 + 0.05 * k, 30.0, "ER", "", 700, "PPL") for k in range(5)),
+    ("Portcity", "Portcity", 15.0, 31.0, "SA", "10", 3_000_000, "PPL"),  # ~107 km E: labels it, foreign
 ]
 GEONAMES_ADMIN1 = {
     "BR.27": "São Paulo", "BR.13": "Maranhão", "BR.23": "Rio Grande do Sul", "PT.17": "Porto",
@@ -287,7 +290,7 @@ GEONAMES_ADMIN1 = {
 }
 GEONAMES_COUNTRIES = {
     "BR": "Brazil", "PT": "Portugal", "CH": "Switzerland", "US": "United States", "SA": "Saudi Arabia", "TD": "Chad",
-    "RU": "Russia", "LY": "Libya", "CN": "China",
+    "RU": "Russia", "LY": "Libya", "CN": "China", "ER": "Eritrea",
 }
 
 

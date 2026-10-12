@@ -269,7 +269,8 @@ class Places:
         return idx, great_circle_km(lat, lon, self.lat[idx], self.lon[idx])
 
     def city_for(self, lat: float, lon: float) -> int | None:
-        """The city that labels (lat, lon), or None: see CITY_MIN_POPULATION."""
+        """The city that labels (lat, lon), or None: see CITY_MIN_POPULATION. It can be across
+        a border; `area` in the label then says where the point itself is."""
         idx, km = self._within(lat, lon, CITY_KM)
         big = self.population[idx] >= CITY_MIN_POPULATION
         idx, km = idx[big], km[big]
@@ -278,11 +279,33 @@ class Places:
         score = self.population[idx] / (km + CITY_DISTANCE_OFFSET_KM) ** CITY_DISTANCE_POWER
         return int(idx[np.argmax(score)])
 
+    def locate(self, lat: float, lon: float) -> int | None:
+        """A place standing for the region and country (lat, lon) is in: the most common
+        (country, admin1) among the nearest places within REGION_KM, or None. A majority, as
+        GeoNames has a few miscoded villages (e.g. Tibetan hamlets filed under Hebei)."""
+        idx, km = self._within(lat, lon, REGION_KM)
+        if idx.size == 0:
+            return None
+        nearest = idx[np.argsort(km)[:REGION_VOTERS]]
+        votes: dict[tuple[str, str], int] = {}
+        for i in nearest:  # ties go to the nearer place, since dicts keep insertion order
+            key = (self.country_code[i], self.admin1[i])
+            votes[key] = votes.get(key, 0) + 1
+        cc, admin1 = max(votes, key=votes.get)
+        return next(int(j) for j in nearest if (self.country_code[j], self.admin1[j]) == (cc, admin1))
+
+    def _area(self, i: int | None) -> dict | None:
+        """The region and country place i (from locate) is in; the region only where labels show it."""
+        if i is None:
+            return None
+        return {"admin1": (self.admin1[i] if self._shows_region(i) else "") or None, "country": self.country[i] or None}
+
     def label_for(self, lat: float, lon: float) -> dict | None:
         """The Place label (see docs/ui-api.md) for a point, or None if nothing is near."""
+        here = self.locate(lat, lon)
         i = self.city_for(lat, lon)
         if i is None:
-            return self._region_label(lat, lon)
+            return self._region_label(here)
         km = float(great_circle_km(lat, lon, self.lat[i], self.lon[i]))
         place = self.describe(i, for_label=True)
         base, direction = place["base_label"], None
@@ -293,23 +316,15 @@ class Places:
         else:
             direction = compass(lat, lon, self.lat[i], self.lon[i])
             tier, label = "offset", f"{km:.0f} km {direction} of {base}"
-        # tier/direction/km/base_label let clients rebuild `label` in other units.
-        return {**place, "km": round(km, 1), "tier": tier, "direction": direction, "label": label}
+        # tier/direction/km/base_label let clients rebuild `label` in other units. `area` is where the
+        # point itself is, which can differ from the city's region or country (across a border).
+        return {**place, "km": round(km, 1), "tier": tier, "direction": direction, "label": label, "area": self._area(here)}
 
-    def _region_label(self, lat: float, lon: float) -> dict | None:
-        """No city near: name only the region and country, by majority of the nearest places
-        (GeoNames has a few miscoded villages, e.g. Tibetan hamlets filed under Hebei)."""
-        idx, km = self._within(lat, lon, REGION_KM)
-        if idx.size == 0:
+    def _region_label(self, i: int | None) -> dict | None:
+        """No city near: name only the region and country the point is in (place i, from locate)."""
+        if i is None:
             return None
-        nearest = idx[np.argsort(km)[:REGION_VOTERS]]
-        votes: dict[tuple[str, str], int] = {}
-        for i in nearest:  # ties go to the nearer place, since dicts keep insertion order
-            key = (self.country_code[i], self.admin1[i])
-            votes[key] = votes.get(key, 0) + 1
-        cc, admin1 = max(votes, key=votes.get)
-        i = next(int(j) for j in nearest if (self.country_code[j], self.admin1[j]) == (cc, admin1))
-        country = self.country[i]
+        cc, admin1, country = self.country_code[i], self.admin1[i], self.country[i]
         shown = admin1 if self._shows_region(i) else ""
         base = ", ".join(p for p in dict.fromkeys((shown, country)) if p)
         if not base:
@@ -327,6 +342,7 @@ class Places:
             "direction": None,
             "base_label": base,
             "label": f"in {base}",
+            "area": self._area(i),
         }
 
     def _shows_region(self, i: int, city: str | None = None) -> bool:

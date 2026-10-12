@@ -58,7 +58,8 @@ the first start caches them in `places.npz` there (~1 s).
   "tier": "near",
   "direction": null,
   "base_label": "Talca, Maule, Chile",
-  "label": "near Talca, Maule, Chile"
+  "label": "near Talca, Maule, Chile",
+  "area": {"admin1": "Maule", "country": "Chile"}
 }
 ```
 
@@ -96,6 +97,14 @@ are never used as labels, though search still finds them.
 - `"region"`: `"in Western Australia, Australia"` when no city qualifies. Then
   `base_label` is `"Western Australia, Australia"`, `name` is the region (or the
   country when admin1 is unknown), and `population`, `lat`, `lon` and `km` are `null`.
+
+`area` is where the cell itself is: `{admin1, country}`, the most common region among
+the 10 nearest places within 500 km, with `admin1` `null` where labels don't show
+regions (the rules above); `area` is `null` if there are no places that near. It can
+differ from the city's: the labelling city may be across a border or a sea, as in
+`"210 km SW of Al Ḩudaydah, Yemen"` with `area` `{"admin1": null, "country": "Eritrea"}`.
+The UI's short name for a place not in or near a city is `area.admin1` when the label
+names that region, else `area.country`.
 
 `base_label` is the place's own name part (`"Cairns, Queensland, Australia"`). The
 UI rebuilds the label from `tier`, `km`, `direction` and `base_label` so it can show
