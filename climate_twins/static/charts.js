@@ -9,7 +9,7 @@ import { fmtAnnualPrecip, fmtPrecip, fmtTemp, precip, precipUnit, temp, tempUnit
 const WASH_OPACITY = 0.22;
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const WIDTH = 368;
+const DEFAULT_WIDTH = 368; // when the panel has no layout yet
 
 const FEATURE_NAMES = {
   tmax: "Daytime highs",
@@ -85,11 +85,11 @@ const toCelsius = (v) => (tempUnit() === "°F" ? ((v - 32) * 5) / 9 : v);
 const toMmPerDay = (v) => (precipUnit() === "in" ? v * 25.4 : v) / DAYS_PER_MONTH;
 
 /** Daily high (solid) and low (dashed) for both places, over a wash of the temperature ramp. */
-function temperatureChart(rows, color, names) {
+function temperatureChart(rows, color, names, width) {
   const bg = wash(TEMP_STOPS, toCelsius);
   const line = { x: "i", stroke: "who", strokeWidth: 2, curve: "monotone-x" };
   return bg.addTo(Plot.plot({
-    width: WIDTH,
+    width,
     height: 170,
     marginLeft: 36,
     x: xAxis,
@@ -110,11 +110,11 @@ function temperatureChart(rows, color, names) {
 }
 
 /** Monthly totals side by side (query left, match right), over a wash of the dry-to-wet ramp. */
-function precipitationChart(rows, color, names) {
+function precipitationChart(rows, color, names, width) {
   const bg = wash(PRECIP_STOPS, toMmPerDay);
   const bar = 0.38; // bar width in months; query left of center, match right
   return bg.addTo(Plot.plot({
-    width: WIDTH,
+    width,
     height: 140,
     marginLeft: 36,
     x: xAxis,
@@ -135,12 +135,12 @@ function precipitationChart(rows, color, names) {
   }));
 }
 
-function differenceChart(share) {
+function differenceChart(share, width) {
   const rows = Object.entries(share)
     .map(([key, value]) => ({ name: FEATURE_NAMES[key] ?? key, value }))
     .sort((a, b) => b.value - a.value);
   return Plot.plot({
-    width: WIDTH,
+    width,
     height: 22 * rows.length,
     marginTop: 0,
     marginBottom: 0,
@@ -181,6 +181,7 @@ function seriesNames(labels) {
  * Render the comparison into `el`.
  * query: the /similar `query` object (with monthly); match: one of its `matches` (with monthly).
  * labels: {query, match} full place labels, and {queryName, matchName} short names (may be null).
+ * `el` must be visible: the charts take its width.
  */
 export function renderComparison(el, query, match, labels) {
   const shift = match.seasons_shifted_6_months ? 6 : 0;
@@ -200,9 +201,11 @@ export function renderComparison(el, query, match, labels) {
     <h4>Summary</h4>${summaryTable(query.summary, match.summary, names)}
     <h4>What makes up the remaining difference</h4><figure class="diff"></figure>
   `;
-  el.querySelector("figure.temp").append(temperatureChart(rows, color, names));
-  el.querySelector("figure.ppt").append(precipitationChart(rows, color, names));
-  el.querySelector("figure.diff").append(differenceChart(match.difference_share));
+  // Charts fill the panel's width (a phone's, or the desktop sidebar's); `el` must be laid out.
+  const width = Math.floor(el.clientWidth) || DEFAULT_WIDTH;
+  el.querySelector("figure.temp").append(temperatureChart(rows, color, names, width));
+  el.querySelector("figure.ppt").append(precipitationChart(rows, color, names, width));
+  el.querySelector("figure.diff").append(differenceChart(match.difference_share, width));
 }
 
 export function escapeHtml(s) {

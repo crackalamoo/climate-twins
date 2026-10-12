@@ -27,11 +27,12 @@ body {
   overflow: hidden;
 }
 
-#map { height: 100vh; }
+#map { height: 100dvh; }
 
 #panel {
-  height: 100vh;
+  height: 100dvh;
   overflow-y: auto;
+  scrollbar-gutter: stable; /* a scrollbar appearing doesn't change the width the charts are drawn at */
   border-left: 1px solid var(--border);
   background: var(--panel);
   padding: 12px 14px 24px;
@@ -60,7 +61,7 @@ button {
   background: var(--bg);
   cursor: pointer;
 }
-button:hover { background: #f0efea; }
+@media (hover: hover) { button:hover { background: #f0efea; } }
 
 #suggestions {
   position: absolute;
@@ -80,7 +81,8 @@ button:hover { background: #f0efea; }
 }
 #suggestions li { padding: 6px 9px; cursor: pointer; }
 #suggestions li .pop { color: var(--muted); font-size: 12px; margin-left: 4px; }
-#suggestions li[aria-selected="true"], #suggestions li:hover { background: var(--hover); }
+#suggestions li[aria-selected="true"] { background: var(--hover); }
+@media (hover: hover) { #suggestions li:hover { background: var(--hover); } }
 
 .controls {
   display: grid;
@@ -145,7 +147,8 @@ button:hover { background: #f0efea; }
   border-bottom: 1px solid var(--border);
   cursor: pointer;
 }
-#results li:hover, #results li.hover { background: var(--hover); }
+#results li.hover { background: var(--hover); }
+@media (hover: hover) { #results li:hover { background: var(--hover); } }
 #results li.selected { background: var(--selected); box-shadow: inset 3px 0 var(--rank-color); }
 #results .rank { font-weight: 700; color: var(--rank-color, var(--text)); font-variant-numeric: tabular-nums; }
 #results .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -225,3 +228,24 @@ table.summary thead th { font-weight: 600; }
 #results:empty { border: 0; }
 .legend .excluded { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .legend .excluded .swatch { width: 14px; height: 10px; border-radius: 2px; flex: none; }
+
+/* Phones: the map on top, the panel below it as its own scrolling sheet. */
+@media (max-width: 700px) {
+  body { grid-template-columns: 1fr; grid-template-rows: 45dvh 1fr; height: 100dvh; }
+  #map { height: auto; }
+  #panel {
+    height: auto;
+    min-height: 0;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    padding: 10px 12px 24px;
+  }
+  #search { font-size: 16px; } /* below 16px, iOS zooms the page in on focus */
+  button { padding: 8px 12px; }
+  .units button { padding: 6px 9px; font-size: 12px; }
+  #results { max-height: none; overflow-y: visible; } /* one scroll: the panel's */
+  #results li { padding: 9px 6px; }
+  /* top right of the map: the legend is placed against the page, and the panel now fills its bottom */
+  .legend { width: 196px; left: auto; right: 6px; top: 6px; bottom: auto; padding: 4px 8px 2px; font-size: 10px; }
+  .legend .bar { height: 8px; }
+}

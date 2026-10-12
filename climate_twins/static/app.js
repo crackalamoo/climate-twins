@@ -200,8 +200,9 @@ function render(data) {
       <span class="label" title="${escapeHtml(placeLabel(m.place, m.cell))}">${escapeHtml(placeLabel(m.place, m.cell))}</span>
       <span class="pct" title="More similar than ${m.more_similar_than_pct_of_land}% of land beyond the exclusion radius">${fmtTop(m.more_similar_than_pct_of_land)}${shift}</span>
       <span class="meta">${fmtDistance(m.km_from_query)} away · distance ${m.distance.toFixed(2)}</span>`;
-    li.addEventListener("mouseenter", () => hover(m.rank));
-    li.addEventListener("mouseleave", () => hover(null));
+    // Mouse only: a tap would leave the row and its pin highlighted, with no "leave" to clear them.
+    li.addEventListener("pointerenter", (e) => e.pointerType === "mouse" && hover(m.rank));
+    li.addEventListener("pointerleave", (e) => e.pointerType === "mouse" && hover(null));
     li.addEventListener("click", () => select(m.rank));
     ui.results.append(li);
   }
@@ -220,9 +221,17 @@ function showComparison(match) {
     queryName: shortPlaceName(current.query.place),
     matchName: shortPlaceName(match.place),
   };
+  ui.compare.hidden = false; // before rendering: the charts take the panel's width
   renderComparison(ui.compare, current.query, match, labels);
-  ui.compare.hidden = false;
+  comparedWidth = ui.compare.clientWidth;
 }
+
+// Redraw the charts when the panel's width changes (a phone rotating, a window resized).
+let comparedWidth = null;
+new ResizeObserver(() => {
+  const match = current?.matches.find((m) => m.rank === selectedRank);
+  if (match && !ui.compare.hidden && ui.compare.clientWidth !== comparedWidth) showComparison(match);
+}).observe(ui.compare);
 
 function hover(rank) {
   map.markMatch("hover", rank);
