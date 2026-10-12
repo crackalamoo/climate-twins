@@ -108,3 +108,11 @@ def test_tile(client: TestClient):
 def test_tile_out_of_range_is_400(client: TestClient):
     r = client.get("/tiles/1/2/0.png", params={"lat": NC_QUERY[0], "lon": NC_QUERY[1]})
     assert r.status_code == 400
+
+
+@pytest.mark.parametrize("path", ["/", "/app.js", "/map.js"])
+def test_static_files_revalidate(client: TestClient, path: str):
+    r = client.get(path)
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "no-cache"
+    assert client.get(path, headers={"If-None-Match": r.headers["etag"]}).status_code == 304

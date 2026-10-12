@@ -32,6 +32,9 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATA = ROOT / "data" / "processed"
 DEFAULT_GEONAMES = ROOT / "data" / "geonames"
 TILE_CACHE_CONTROL = "public, max-age=86400"
+# The UI's ES modules import each other, so a browser mixing a fresh app.js with a stale
+# cached map.js fails to start. Revalidate every load; ETags keep unchanged files a cheap 304.
+STATIC_CACHE_CONTROL = "no-cache"
 DEFAULT_PORT = 8000
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -157,8 +160,15 @@ def heatmap_legend() -> dict:
     return tiles.legend()
 
 
+class RevalidatedStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope) -> Response:
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = STATIC_CACHE_CONTROL
+        return response
+
+
 # The web UI. Mounted at "/" and so must stay after every API route.
-app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+app.mount("/", RevalidatedStaticFiles(directory=STATIC_DIR, html=True), name="static")
 
 
 def main() -> None:
