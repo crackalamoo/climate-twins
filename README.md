@@ -69,6 +69,18 @@ curl 'localhost:8000/similar?lat=37.77&lon=-122.42&n=5'
   differ from its cell.
 - Normals only: nothing about variability, extremes or storms.
 - Place labels name a nearby large city, not the cell itself (rules in
-  `docs/ui-api.md`). Names are from [GeoNames](https://www.geonames.org/)
-  (CC BY 4.0); which country a point is in, from [Natural Earth](https://www.naturalearthdata.com/)
-  (public domain).
+  `docs/ui-api.md`).
+
+## Data sources
+
+| Source | Used for | Licence |
+|---|---|---|
+| [TerraClimate](https://www.climatologylab.org/terraclimate.html) 1991–2020 normals | Climate data, the index and the heatmap | CC0 (public domain) |
+| [GeoNames](https://www.geonames.org/) | Place labels, search, region and country names | CC BY 4.0: credit required (the UI's panel footer) |
+| [Natural Earth](https://www.naturalearthdata.com/) admin-1 boundaries | Which country and region a point is in | Public domain |
+| [OpenStreetMap](https://www.openstreetmap.org/copyright) via [OpenMapTiles](https://openmaptiles.org/) and [OpenFreeMap](https://openfreemap.org/) | Basemap | ODbL: credit required (MapLibre's attribution control, from the style) |
+
+TerraClimate: Abatzoglou, J.T., S.Z. Dobrowski, S.A. Parks and K.C. Hegewisch (2018),
+"TerraClimate, a high-resolution global dataset of monthly climate and climatic water
+balance from 1958–2015", *Scientific Data* 5:170191,
+[doi:10.1038/sdata.2017.191](https://doi.org/10.1038/sdata.2017.191).

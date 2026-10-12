@@ -226,6 +226,10 @@ table.summary thead th { font-weight: 600; }
 .legend .ticks span:first-child { transform: none; }
 .legend .ticks span:last-child { transform: translateX(-100%); }
 #results:empty { border: 0; }
+
+/* data credits, at the foot of the panel (pushed down when the panel is short) */
+.credits { margin-top: auto; padding-top: 12px; font-size: 11px; color: var(--muted); }
+.credits a { color: inherit; }
 .legend .excluded { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .legend .excluded .swatch { width: 14px; height: 10px; border-radius: 2px; flex: none; }
 
