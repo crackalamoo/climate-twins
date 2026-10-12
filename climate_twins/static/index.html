@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Climate Twins</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@6.12.0/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <main id="map"></main>
+  <div id="legend" class="legend" hidden></div>
+
+  <aside id="panel">
+    <div class="search-row">
+      <div class="search">
+        <input id="search" type="search" placeholder="Search a place…" autocomplete="off"
+               role="combobox" aria-expanded="false" aria-controls="suggestions" aria-autocomplete="list">
+        <ul id="suggestions" role="listbox" hidden></ul>
+      </div>
+      <button id="locate" type="button" title="Use my location">My location</button>
+    </div>
+
+    <div class="controls">
+      <label title="Ignore matches this close to the query">
+        <span>Exclude within <output id="exclude-out">1,500 km</output></span>
+        <input id="exclude" type="range" min="0" max="3000" step="50" value="1500">
+      </label>
+      <label title="Minimum spacing between results">
+        <span>Spacing <output id="suppress-out">400 km</output></span>
+        <input id="suppress" type="range" min="0" max="2000" step="50" value="400">
+      </label>
+      <label class="check" title="Also match places whose seasons are 6 months offset (e.g. the other hemisphere)">
+        <input id="align" type="checkbox" checked> Allow season shift
+      </label>
+      <div id="units" class="units" role="group" aria-label="Units">
+        <button type="button" data-units="metric" aria-pressed="true">°C · mm · km</button>
+        <button type="button" data-units="us" aria-pressed="false">°F · in · mi</button>
+      </div>
+    </div>
+
+    <p id="message" class="message" hidden></p>
+
+    <section id="query-summary" hidden></section>
+
+    <p id="empty" class="empty">Search for a place, use your location, or click anywhere on land to find
+      places around the world with a similar climate.</p>
+
+    <ol id="results"></ol>
+
+    <section id="compare" hidden></section>
+  </aside>
+</body>
+</html>
