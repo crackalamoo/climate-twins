@@ -200,7 +200,7 @@ export function renderComparison(el, query, match, labels) {
     <h4>Temperature</h4><p class="note">Average daily high and low.</p><figure class="temp"></figure>
     <h4>Precipitation</h4><figure class="ppt"></figure>
     <h4>Summary</h4>${summaryTable(query.summary, match.summary, names)}
-    <h4>What makes up the remaining difference</h4><figure class="diff"></figure>
+    <h4>What makes up the difference</h4><figure class="diff"></figure>
   `;
   // Charts fill the panel's width (a phone's, or the desktop sidebar's); `el` must be laid out.
   const width = Math.floor(el.clientWidth) || DEFAULT_WIDTH;

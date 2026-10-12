@@ -199,7 +199,7 @@ function render(data) {
       <span class="rank">${m.rank}</span>
       <span class="label" title="${escapeHtml(placeLabel(m.place, m.cell))}">${escapeHtml(placeLabel(m.place, m.cell))}</span>
       <span class="pct" title="More similar than ${m.more_similar_than_pct_of_land}% of land beyond the exclusion radius">${fmtTop(m.more_similar_than_pct_of_land)}${shift}</span>
-      <span class="meta">${fmtDistance(m.km_from_query)} away · distance ${m.distance.toFixed(2)}</span>`;
+      <span class="meta">${fmtDistance(m.km_from_query)} away · <span title="How different the two climates are (0 = identical): the gap between their standardized monthly features">climate difference ${m.distance.toFixed(2)}</span></span>`;
     // Mouse only: a tap would leave the row and its pin highlighted, with no "leave" to clear them.
     li.addEventListener("pointerenter", (e) => e.pointerType === "mouse" && hover(m.rank));
     li.addEventListener("pointerleave", (e) => e.pointerType === "mouse" && hover(null));

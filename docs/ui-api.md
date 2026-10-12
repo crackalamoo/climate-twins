@@ -28,7 +28,8 @@ Each match has:
 - `more_similar_than_pct_of_land`: the area-weighted share of land beyond
   `exclude_km` that is less similar.
 - `seasons_shifted_6_months`.
-- `difference_share`: which features account for the remaining difference.
+- `difference_share`: which features make up the difference: each one's share of the
+  squared difference over all features (`distance` is the same, up to the PCA truncation).
 - `summary`: annual and extreme values.
 - `place`: a **Place label** (below), or `null`. The query's `place` is for the
   requested `lat/lon`; a match's is for its cell centre.
@@ -199,7 +200,8 @@ legend from this endpoint.
 - Outputs:
   - the heatmap;
   - numbered pins for the matches and a star for the query;
-  - a results list (place label, distance, percentile, ⇄ when seasons are shifted);
+  - a results list (place label, km away, `distance` shown as "climate difference",
+    percentile, ⇄ when seasons are shifted);
   - clicking a result flies the map to it and shows a comparison panel. The panel
     has 12-month charts (temperature band tmin–tmax plus precipitation bars, query
     vs match, with seasons aligned when shifted) built with Observable Plot (CDN),
