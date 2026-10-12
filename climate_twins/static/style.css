@@ -4,8 +4,8 @@
   --border: #e2e1dc;
   --text: #1f1f1d;
   --muted: #6b6a64;
-  --query: #2a78d6;   /* query: blue, used for the star and in charts */
-  --match: #1baf7a;   /* match: teal (distinct from the yellow-red-purple heatmap), used for pins and in charts */
+  --query: #2a78d6;   /* query: blue, the star; the only cool colour on the map (pins take the heatmap's purples) */
+  --match: #1baf7a;   /* match: teal (distinct from the yellow-red-purple heatmap), used in charts; pins take the heatmap's colours (map.js matchColors) */
   --highlight: #fff3e8;
   --error-bg: #fdf0ec;
   --error: #a33a14;
@@ -144,7 +144,7 @@ button:hover { background: #f0efea; }
 }
 #results li:hover, #results li.hover { background: #f3f2ee; }
 #results li.selected { background: var(--highlight); }
-#results .rank { font-weight: 700; color: #12805a; font-variant-numeric: tabular-nums; }
+#results .rank { font-weight: 700; color: var(--rank-color, #12805a); font-variant-numeric: tabular-nums; }
 #results .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #results .pct { font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; }
 #results .meta { grid-column: 2 / -1; font-size: 12px; color: var(--muted); }
@@ -185,27 +185,16 @@ table.summary thead th { font-weight: 600; }
   cursor: default;
 }
 
-.marker-match {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--match);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
-  display: grid;
-  place-items: center;
-  border: 2px solid #fff;
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.35);
-  cursor: pointer;
+/* hover tooltip on a merged match pin: the ranks inside */
+.merged-tip .maplibregl-popup-content {
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.18);
 }
-.marker-match.hover, .marker-match.selected {
-  width: 28px;
-  height: 28px;
-  font-size: 13px;
-  background: #0f7a54;
-  z-index: 2;
-}
+.merged-tip .hint { font-weight: normal; font-size: 11px; color: var(--muted); }
 
 .legend {
   position: absolute;

@@ -2,7 +2,7 @@
 // Query state lives in the URL (?lat&lon&exclude&suppress&align); the display units
 // (units.js) live only in memory.
 
-import { ClimateMap, renderLegend } from "./map.js";
+import { ClimateMap, matchColors, renderLegend } from "./map.js";
 import { escapeHtml, renderComparison, statsHtml } from "./charts.js";
 import { fmtDistance, setUnits, units } from "./units.js";
 
@@ -146,6 +146,9 @@ async function runQuery(lat, lon, { fly = false } = {}) {
   }
   if (abort.signal.aborted) return;
 
+  await legendReady; // pins are coloured on the heatmap's scale
+  if (abort.signal.aborted) return;
+
   clearMessage();
   current = data;
   queryPoint = { lat, lon };
@@ -159,6 +162,7 @@ async function runQuery(lat, lon, { fly = false } = {}) {
 
 function render(data) {
   const q = data.query;
+  const colors = matchColors(data.matches, heatStops);
   ui.empty.hidden = true;
 
   ui.querySummary.innerHTML = `
@@ -174,6 +178,7 @@ function render(data) {
   for (const m of data.matches) {
     const li = document.createElement("li");
     li.dataset.rank = m.rank;
+    li.style.setProperty("--rank-color", colors.get(m.rank)); // same colour as its map pin
     const shift = m.seasons_shifted_6_months
       ? ` <span class="shift" title="Seasons shifted 6 months: its climate matches the query's six months later (e.g. the other hemisphere)">⇄</span>`
       : "";
@@ -189,7 +194,7 @@ function render(data) {
   }
 
   map.setQuery(q.cell.lat, q.cell.lon);
-  map.setMatches(data.matches);
+  map.setMatches(data.matches, colors);
   selectedRank = null;
   ui.compare.hidden = true;
   ui.compare.innerHTML = "";
@@ -390,9 +395,14 @@ function initFromUrl() {
   }
 }
 
-fetch("/heatmap/legend")
+// The heatmap's colour stops, which also colour the match pins (null: pins fall back to one colour).
+let heatStops = null;
+const legendReady = fetch("/heatmap/legend")
   .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
-  .then((legend) => renderLegend(ui.legend, legend.stops, legend.excluded))
+  .then((legend) => {
+    heatStops = legend.stops;
+    renderLegend(ui.legend, legend.stops, legend.excluded);
+  })
   .catch((err) => console.warn("No heatmap legend:", err.message));
 
 initFromUrl();
