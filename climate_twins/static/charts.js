@@ -1,10 +1,12 @@
 // The comparison panel: query vs one match, drawn with Observable Plot.
 
 import * as Plot from "https://cdn.jsdelivr.net/npm/@observablehq/plot@0.6.17/+esm";
+import { DAYS_PER_MONTH, PRECIP_STOPS, TEMP_STOPS, gradientStops } from "./ramps.js";
 import { fmtAnnualPrecip, fmtPrecip, fmtTemp, precip, precipUnit, temp, tempUnit } from "./units.js";
 
-export const QUERY_COLOR = "#2a78d6";
-export const MATCH_COLOR = "#1baf7a";
+// Colour says which place (the query's blue, the match's pin colour). The climate ramps (ramps.js)
+// are a faint wash behind each chart, so the plot area itself reads as cold/hot or dry/wet.
+const WASH_OPACITY = 0.22;
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const WIDTH = 368;
@@ -34,11 +36,13 @@ export function statsHtml(summary) {
 
 /**
  * Rows {i, who, tmin, tmax, ppt} with the match rolled by `shift` months to line up with the query.
- * tmin/tmax/ppt are in display units; ppt_mm keeps the metric value for tooltips.
+ * tmin/tmax/ppt are in display units; *_c and ppt_mm keep the metric values for colours and tooltips.
  */
 function monthlyRows(query, match, shift) {
   const row = (i, who, m, j) => ({
-    i, who, month: MONTHS[j], tmin: temp(m.tmin[j]), tmax: temp(m.tmax[j]), ppt: precip(m.ppt[j]), ppt_mm: m.ppt[j],
+    i, who, month: MONTHS[j],
+    tmin: temp(m.tmin[j]), tmax: temp(m.tmax[j]), tmin_c: m.tmin[j], tmax_c: m.tmax[j],
+    ppt: precip(m.ppt[j]), ppt_mm: m.ppt[j],
   });
   const rows = [];
   for (let i = 0; i < 12; i++) {
@@ -54,33 +58,62 @@ const xAxis = {
   tickFormat: (i) => MONTHS[i] ?? "",
   label: null,
 };
-const color = { domain: ["Query", "Match"], range: [QUERY_COLOR, MATCH_COLOR] };
+let washId = 0;
 
-function temperatureChart(rows) {
-  return Plot.plot({
+/**
+ * A faint vertical wash of a climate ramp behind the plot area: `toMetric` maps the y scale's display
+ * units to the ramp's units. Returns the frame mark to put first and a function to add its gradient.
+ */
+function wash(stops, toMetric) {
+  const id = `wash-${washId++}`;
+  const mark = Plot.frame({ fill: `url(#${id})`, fillOpacity: WASH_OPACITY });
+  const addTo = (chart) => {
+    const y = chart.scale("y");
+    const [lo, hi] = y.domain;
+    const stopsSvg = gradientStops(stops, toMetric(hi), toMetric(lo))
+      .map(([offset, color]) => `<stop offset="${offset}" stop-color="${color}"/>`)
+      .join("");
+    const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+    defs.innerHTML = `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="0" x2="0" y1="${y.apply(hi)}" y2="${y.apply(lo)}">${stopsSvg}</linearGradient>`;
+    (chart.tagName === "svg" ? chart : chart.querySelector("svg")).prepend(defs);
+    return chart;
+  };
+  return { mark, addTo };
+}
+
+const toCelsius = (v) => (tempUnit() === "°F" ? ((v - 32) * 5) / 9 : v);
+const toMmPerDay = (v) => (precipUnit() === "in" ? v * 25.4 : v) / DAYS_PER_MONTH;
+
+/** Daily high (solid) and low (dashed) for both places, over a wash of the temperature ramp. */
+function temperatureChart(rows, color, names) {
+  const bg = wash(TEMP_STOPS, toCelsius);
+  const line = { x: "i", stroke: "who", strokeWidth: 2, curve: "monotone-x" };
+  return bg.addTo(Plot.plot({
     width: WIDTH,
     height: 170,
     marginLeft: 36,
     x: xAxis,
-    y: { label: tempUnit(), grid: true },
+    y: { label: tempUnit(), grid: true, nice: true },
     color,
     marks: [
-      Plot.areaY(rows, { x: "i", y1: "tmin", y2: "tmax", fill: "who", fillOpacity: 0.18, curve: "monotone-x" }),
-      Plot.lineY(rows, { x: "i", y: "tmax", stroke: "who", strokeWidth: 2, curve: "monotone-x" }),
-      Plot.lineY(rows, { x: "i", y: "tmin", stroke: "who", strokeWidth: 2, strokeDasharray: "4,2", curve: "monotone-x" }),
+      bg.mark,
+      Plot.lineY(rows, { ...line, y: "tmax" }),
+      Plot.lineY(rows, { ...line, y: "tmin", strokeDasharray: "4,2" }),
       Plot.tip(rows, Plot.pointerX({
         x: "i",
         y: "tmax",
         stroke: "who",
-        title: (d) => `${d.who} (${d.month})\nhigh ${d.tmax.toFixed(1)} ${tempUnit()}\nlow ${d.tmin.toFixed(1)} ${tempUnit()}`,
+        title: (d) => `${names[d.who]} (${d.month})\nhigh ${d.tmax.toFixed(1)} ${tempUnit()}\nlow ${d.tmin.toFixed(1)} ${tempUnit()}`,
       })),
     ],
-  });
+  }));
 }
 
-function precipitationChart(rows) {
+/** Monthly totals side by side (query left, match right), over a wash of the dry-to-wet ramp. */
+function precipitationChart(rows, color, names) {
+  const bg = wash(PRECIP_STOPS, toMmPerDay);
   const bar = 0.38; // bar width in months; query left of center, match right
-  return Plot.plot({
+  return bg.addTo(Plot.plot({
     width: WIDTH,
     height: 140,
     marginLeft: 36,
@@ -88,17 +121,18 @@ function precipitationChart(rows) {
     y: { label: precipUnit(), grid: true },
     color,
     marks: [
+      bg.mark,
       Plot.rectY(rows, {
         x1: (d) => d.i + (d.who === "Query" ? -bar : 0.02),
         x2: (d) => d.i + (d.who === "Query" ? -0.02 : bar),
         y: "ppt",
         fill: "who",
         tip: true,
-        title: (d) => `${d.who} (${d.month}): ${fmtPrecip(d.ppt_mm)}`,
+        title: (d) => `${names[d.who]} (${d.month}): ${fmtPrecip(d.ppt_mm)}`,
       }),
       Plot.ruleY([0]),
     ],
-  });
+  }));
 }
 
 function differenceChart(share) {
@@ -121,36 +155,53 @@ function differenceChart(share) {
   });
 }
 
-function summaryTable(query, match) {
+function summaryTable(query, match, names) {
   const body = SUMMARY_ROWS.map(
     ([key, name, fmt]) => `<tr><td>${name}</td><td>${fmt(query[key])}</td><td>${fmt(match[key])}</td></tr>`,
   ).join("");
   return `<table class="summary">
-    <thead><tr><th></th><th style="color:${QUERY_COLOR}">Query</th><th style="color:${MATCH_COLOR}">Match #</th></tr></thead>
+    <thead><tr><th></th><th class="query">★ ${escapeHtml(names.Query)}</th><th class="match">${escapeHtml(names.Match)}</th></tr></thead>
     <tbody>${body}</tbody></table>`;
+}
+
+function keyHtml(names) {
+  return `<div class="key"><span class="query">★ ${escapeHtml(names.Query)}</span><span class="match">${escapeHtml(names.Match)}</span></div>`;
+}
+
+/**
+ * What to call the two places in the key, table and tooltips: their short names (labels.queryName /
+ * labels.matchName), or "Query" and "Match" when a name is missing or both are the same.
+ */
+function seriesNames(labels) {
+  const { queryName: q, matchName: m } = labels;
+  return q && m && q !== m ? { Query: q, Match: m } : { Query: "Query", Match: "Match" };
 }
 
 /**
  * Render the comparison into `el`.
  * query: the /similar `query` object (with monthly); match: one of its `matches` (with monthly).
+ * labels: {query, match} full place labels, and {queryName, matchName} short names (may be null).
  */
 export function renderComparison(el, query, match, labels) {
   const shift = match.seasons_shifted_6_months ? 6 : 0;
   const rows = monthlyRows(query.monthly, match.monthly, shift);
+  const style = getComputedStyle(el);
+  const [queryColor, matchColor] = ["--query", "--match"].map((v) => style.getPropertyValue(v).trim());
+  const color = { domain: ["Query", "Match"], range: [queryColor, matchColor] };
+  const names = seriesNames(labels);
 
   el.innerHTML = `
     <h3>#${match.rank} ${escapeHtml(labels.match)}</h3>
     <p class="note">vs ${escapeHtml(labels.query)}</p>
-    <div class="key"><span style="--c:${QUERY_COLOR}">Query</span><span style="--c:${MATCH_COLOR}">Match</span></div>
-    ${shift ? `<p class="note">⇄ Match shifted 6 months: its Jul is shown under Jan, and so on.</p>` : ""}
-    <h4>Temperature</h4><p class="note">Band from average daily low (dashed) to high (solid).</p><figure class="temp"></figure>
+    ${keyHtml(names)}
+    ${shift ? `<p class="note">⇄ ${escapeHtml(names.Match)} shifted 6 months: its Jul is shown under Jan, and so on.</p>` : ""}
+    <h4>Temperature</h4><p class="note">Average daily high (solid) and low (dashed).</p><figure class="temp"></figure>
     <h4>Precipitation</h4><figure class="ppt"></figure>
-    <h4>Summary</h4>${summaryTable(query.summary, match.summary)}
+    <h4>Summary</h4>${summaryTable(query.summary, match.summary, names)}
     <h4>What makes up the remaining difference</h4><figure class="diff"></figure>
   `;
-  el.querySelector("thead th:last-child").textContent = `Match #${match.rank}`;
-  el.querySelector("figure.temp").append(temperatureChart(rows));
-  el.querySelector("figure.ppt").append(precipitationChart(rows));
+  el.querySelector("figure.temp").append(temperatureChart(rows, color, names));
+  el.querySelector("figure.ppt").append(precipitationChart(rows, color, names));
   el.querySelector("figure.diff").append(differenceChart(match.difference_share));
 }
 

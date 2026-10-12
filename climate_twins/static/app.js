@@ -56,6 +56,19 @@ function placeLabel(place, cell) {
   return `${fmtDistance(place.km)} ${place.direction} of ${place.base_label}`;
 }
 
+/**
+ * A short name for a place: the city if the point is in or near it; otherwise the point's own region
+ * if the label names that region, else the point's own country (`area`: where the point itself is,
+ * as the labelling city can be across a border). Null if there is no place.
+ */
+function shortPlaceName(place) {
+  if (!place?.tier) return null;
+  if (place.tier === "exact" || place.tier === "near") return place.name;
+  const { admin1, country } = place.area ?? {};
+  const regionInLabel = admin1 && place.base_label.split(", ").includes(admin1);
+  return (regionInLabel ? admin1 : country) ?? null;
+}
+
 /** more_similar_than_pct_of_land (e.g. 99.994) -> "top 0.006%". */
 function fmtTop(pct) {
   const top = 100 - pct;
@@ -201,10 +214,13 @@ function render(data) {
 }
 
 function showComparison(match) {
-  renderComparison(ui.compare, current.query, match, {
+  const labels = {
     query: placeLabel(current.query.place, current.query.cell),
     match: placeLabel(match.place, match.cell),
-  });
+    queryName: shortPlaceName(current.query.place),
+    matchName: shortPlaceName(match.place),
+  };
+  renderComparison(ui.compare, current.query, match, labels);
   ui.compare.hidden = false;
 }
 

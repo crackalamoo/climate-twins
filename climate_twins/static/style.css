@@ -5,8 +5,10 @@
   --text: #1f1f1d;
   --muted: #6b6a64;
   --query: #2a78d6;   /* query: blue, the star; the only cool colour on the map (pins take the heatmap's purples) */
-  --match: #1baf7a;   /* match: teal (distinct from the yellow-red-purple heatmap), used in charts; pins take the heatmap's colours (map.js matchColors) */
-  --highlight: #fff3e8;
+  --match: #8e2c8a;   /* the match being compared, in charts and tables: one constant purple, from the pins' family
+                         (rank colours are only for setting matches against each other: map pins, result list) */
+  --hover: #f1f0ec;    /* hovered rows and suggestions; pressed toggles */
+  --selected: #f3edf6; /* the selected match: a whisper of the pins' purple */
   --error-bg: #fdf0ec;
   --error: #a33a14;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -78,7 +80,7 @@ button:hover { background: #f0efea; }
 }
 #suggestions li { padding: 6px 9px; cursor: pointer; }
 #suggestions li .pop { color: var(--muted); font-size: 12px; margin-left: 4px; }
-#suggestions li[aria-selected="true"], #suggestions li:hover { background: var(--highlight); }
+#suggestions li[aria-selected="true"], #suggestions li:hover { background: var(--hover); }
 
 .controls {
   display: grid;
@@ -90,6 +92,7 @@ button:hover { background: #f0efea; }
 .controls label { display: flex; flex-direction: column; }
 .controls output { color: var(--text); font-variant-numeric: tabular-nums; }
 .controls input[type="range"] { width: 100%; margin: 2px 0 0; }
+.controls input { accent-color: #52514e; } /* controls stay neutral; colour is for data */
 .controls .check { flex-direction: row; align-items: center; gap: 4px; }
 
 /* metric / US units: a two-option segmented control */
@@ -97,7 +100,7 @@ button:hover { background: #f0efea; }
 .units button { padding: 2px 7px; font-size: 11px; color: var(--muted); border-radius: 0; }
 .units button:first-child { border-radius: 6px 0 0 6px; }
 .units button:last-child { border-radius: 0 6px 6px 0; margin-left: -1px; }
-.units button[aria-pressed="true"] { background: var(--highlight); color: var(--text); }
+.units button[aria-pressed="true"] { background: var(--hover); color: var(--text); font-weight: 600; }
 
 .message {
   margin: 0;
@@ -142,9 +145,9 @@ button:hover { background: #f0efea; }
   border-bottom: 1px solid var(--border);
   cursor: pointer;
 }
-#results li:hover, #results li.hover { background: #f3f2ee; }
-#results li.selected { background: var(--highlight); }
-#results .rank { font-weight: 700; color: var(--rank-color, #12805a); font-variant-numeric: tabular-nums; }
+#results li:hover, #results li.hover { background: var(--hover); }
+#results li.selected { background: var(--selected); box-shadow: inset 3px 0 var(--rank-color); }
+#results .rank { font-weight: 700; color: var(--rank-color, var(--text)); font-variant-numeric: tabular-nums; }
 #results .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #results .pct { font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; }
 #results .meta { grid-column: 2 / -1; font-size: 12px; color: var(--muted); }
@@ -160,17 +163,22 @@ button:hover { background: #f0efea; }
 #compare figure { margin: 0; }
 #compare svg { overflow: visible; }
 
-.key { display: flex; gap: 12px; font-size: 12px; color: var(--muted); }
+.key { display: flex; gap: 14px; font-size: 12px; font-weight: 600; margin: 2px 0; }
+.key .query { --c: var(--query); }
+.key .match { --c: var(--match); }
+.key span { color: var(--c); }
 .key span::before {
   content: "";
   display: inline-block;
   width: 10px;
   height: 10px;
   border-radius: 2px;
-  margin-right: 4px;
+  margin-right: 5px;
   vertical-align: -1px;
   background: var(--c);
 }
+table.summary th.query { color: var(--query); }
+table.summary th.match { color: var(--match); }
 
 table.summary { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
 table.summary th, table.summary td { padding: 3px 4px; border-bottom: 1px solid var(--border); text-align: right; }
