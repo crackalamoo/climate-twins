@@ -84,7 +84,8 @@ function wash(stops, toMetric) {
 const toCelsius = (v) => (tempUnit() === "°F" ? ((v - 32) * 5) / 9 : v);
 const toMmPerDay = (v) => (precipUnit() === "in" ? v * 25.4 : v) / DAYS_PER_MONTH;
 
-/** Daily high (solid) and low (dashed) for both places, over a wash of the temperature ramp. */
+/** Daily high and low for both places, over a wash of the temperature ramp. Each place's high is
+ * the upper of its two lines, so they share one style. */
 function temperatureChart(rows, color, names, width) {
   const bg = wash(TEMP_STOPS, toCelsius);
   const line = { x: "i", stroke: "who", strokeWidth: 2, curve: "monotone-x" };
@@ -98,7 +99,7 @@ function temperatureChart(rows, color, names, width) {
     marks: [
       bg.mark,
       Plot.lineY(rows, { ...line, y: "tmax" }),
-      Plot.lineY(rows, { ...line, y: "tmin", strokeDasharray: "4,2" }),
+      Plot.lineY(rows, { ...line, y: "tmin" }),
       Plot.tip(rows, Plot.pointerX({
         x: "i",
         y: "tmax",
@@ -196,7 +197,7 @@ export function renderComparison(el, query, match, labels) {
     <p class="note">vs ${escapeHtml(labels.query)}</p>
     ${keyHtml(names)}
     ${shift ? `<p class="note">⇄ ${escapeHtml(names.Match)} shifted 6 months: its Jul is shown under Jan, and so on.</p>` : ""}
-    <h4>Temperature</h4><p class="note">Average daily high (solid) and low (dashed).</p><figure class="temp"></figure>
+    <h4>Temperature</h4><p class="note">Average daily high and low.</p><figure class="temp"></figure>
     <h4>Precipitation</h4><figure class="ppt"></figure>
     <h4>Summary</h4>${summaryTable(query.summary, match.summary, names)}
     <h4>What makes up the remaining difference</h4><figure class="diff"></figure>
