@@ -210,6 +210,9 @@ export class ClimateMap {
 
   /** Show the matches as numbered pins, merged into the best-ranked one where they would overlap. */
   async setMatches(matches, colors) {
+    // New matches: the old highlights name ranks of the old ones. Cleared before the await, so a
+    // caller can mark one of the new matches straight after (the units toggle keeps its selection).
+    this.marks = { hover: null, selected: null };
     await this.loaded;
     this.points = [...matches]
       .sort((a, b) => a.rank - b.rank)
