@@ -13,6 +13,11 @@
   <div id="legend" class="legend" hidden></div>
 
   <aside id="panel">
+    <header class="intro">
+      <h1>Climate Twins</h1>
+      <p>Find places around the world whose climate is most like yours.</p>
+    </header>
+
     <div class="search-row">
       <div class="search">
         <input id="search" type="search" placeholder="Search a place…" autocomplete="off"
@@ -21,6 +26,15 @@
       </div>
       <button id="locate" type="button" title="Use my location">My location</button>
     </div>
+
+    <section id="empty" class="start">
+      <h2>Pick a place to start</h2>
+      <ul>
+        <li><b>Search</b> for a city or town above</li>
+        <li>Use <b>My location</b></li>
+        <li><b>Tap or click</b> anywhere on land on the map</li>
+      </ul>
+    </section>
 
     <div class="controls">
       <label title="Ignore matches this close to the query">
@@ -43,9 +57,6 @@
     <p id="message" class="message" hidden></p>
 
     <section id="query-summary" hidden></section>
-
-    <p id="empty" class="empty">Search for a place, use your location, or click anywhere on land to find
-      places around the world with a similar climate.</p>
 
     <ol id="results"></ol>
 

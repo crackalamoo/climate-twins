@@ -113,7 +113,21 @@ button {
 }
 .message.info { background: #eef4fb; color: #1c4f8f; }
 
-.empty { color: var(--muted); margin: 8px 0; line-height: 1.45; }
+/* the panel's title, always shown */
+.intro h1 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
+.intro p { margin: 2px 0 0; color: var(--text); line-height: 1.4; }
+
+/* first visit: how to start, in a card that stands out from the controls above it */
+.start {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  line-height: 1.45;
+}
+.start h2 { font-size: 15px; margin: 0 0 6px; }
+.start ul { margin: 0; padding-left: 18px; }
+.start li { margin: 2px 0; }
 
 #query-summary h2 { font-size: 16px; margin: 0 0 2px; }
 #query-summary h2 .star { color: var(--query); }

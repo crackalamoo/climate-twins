@@ -344,7 +344,7 @@ export class ClimateMap {
   }
 }
 
-/** Render the heatmap legend from /heatmap/legend stops into `el`. */
+/** Render the heatmap legend from /heatmap/legend stops into `el`; the caller shows it once there is a heatmap. */
 export function renderLegend(el, stops, excluded) {
   stops = [...stops].sort((a, b) => b.top_pct - a.top_pct); // 5% (faint) -> 0.01% (strong)
   const rgba = (c) => `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${c.length < 4 ? 1 : c[3] > 1 ? (c[3] / 255).toFixed(3) : c[3]})`;
@@ -358,5 +358,4 @@ export function renderLegend(el, stops, excluded) {
     <div class="ticks">${stops.map((s, i) => `<span style="left:${pos(i)}%">${s.top_pct}%</span>`).join("")}</div>
     ${excluded ? `<div class="excluded"><span class="swatch" style="background:${rgba(excluded.rgba)}"></span>${excluded.label}</div>` : ""}
   `;
-  el.hidden = false;
 }

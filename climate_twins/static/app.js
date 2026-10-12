@@ -177,6 +177,7 @@ function render(data) {
   const q = data.query;
   const colors = matchColors(data.matches, heatStops);
   ui.empty.hidden = true;
+  ui.legend.hidden = !ui.legend.childElementCount; // with a heatmap to explain (and a legend to show)
 
   ui.querySummary.innerHTML = `
     <h2><span class="star">★</span> ${escapeHtml(placeLabel(q.place, q.cell))}</h2>
