@@ -239,7 +239,7 @@ function select(rank) {
     li.classList.toggle("selected", on);
     if (on) li.scrollIntoView({ block: "nearest" });
   }
-  map.flyTo(match.cell.lat, match.cell.lon);
+  map.focusMatch(rank);
   showComparison(match);
   ui.compare.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }

@@ -271,18 +271,21 @@ export class ClimateMap {
   handleClick(e, onClick) {
     const feature = this.matchAt(e.point);
     if (!feature) onClick(e.lngLat.lat, e.lngLat.lng);
-    else if (feature.properties.merged) this.expandPin(feature.properties.rank);
-    else this.onMarkerClick(feature.properties.rank);
+    else this.onMarkerClick(feature.properties.rank); // a merged pin is its best match's
   }
 
-  /** Zoom in on a merged pin's best match until its nearest merged match splits off. */
-  expandPin(rank) {
-    const pin = this.pins.find((p) => p.lead.rank === rank);
-    if (!pin) return;
+  /**
+   * Fly to a match (from the list or a pin), at least to zoom 4 and far enough that it stands alone:
+   * no other match within MERGE_PX, so it isn't merged and anything merged into it splits off.
+   */
+  focusMatch(rank) {
+    const point = this.points?.find((p) => p.rank === rank);
+    if (!point) return;
     const zoom = this.map.getZoom();
-    const nearest = Math.min(...pin.members.slice(1).map((m) => pixelDistance(pin.lead, m, zoom)));
-    const split = zoom + Math.log2(MERGE_PX / Math.max(nearest, 1e-6)) + 0.1;
-    this.map.easeTo({ center: [pin.lead.lon, pin.lead.lat], zoom: Math.min(split, this.map.getMaxZoom()) });
+    const nearest = Math.min(...this.points.filter((p) => p !== point).map((p) => pixelDistance(point, p, zoom)));
+    const alone = nearest < MERGE_PX ? zoom + Math.log2(MERGE_PX / Math.max(nearest, 1e-6)) + 0.1 : zoom;
+    const target = Math.min(Math.max(zoom, 4, alone), this.map.getMaxZoom());
+    this.map.flyTo({ center: [point.lon, point.lat], zoom: target, essential: true });
   }
 
   handleHover(e) {
@@ -303,7 +306,7 @@ export class ClimateMap {
     const ranks = feature.properties.ranks.split(",").filter(Boolean).map(Number).sort((a, b) => a - b);
     this.tip
       .setLngLat(feature.geometry.coordinates)
-      .setHTML(`${ranks.map((r) => `#${r}`).join(", ")}<div class="hint">Click to zoom in</div>`)
+      .setHTML(ranks.map((r) => `#${r}`).join(", "))
       .addTo(this.map);
   }
 
