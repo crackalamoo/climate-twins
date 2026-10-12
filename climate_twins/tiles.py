@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image
 
 from .geo import great_circle_km
-from .index import ClimateIndex, QueryDistances
+from .index import ClimateIndex, Query
 
 TILE_SIZE = 256
 MAX_ZOOM = 10  # the client overzooms past 6; beyond ~5 the 4.6 km cells are just upscaled
@@ -84,7 +84,7 @@ EMPTY_PNG = encode_png(_EMPTY_RGBA)
 
 def render_tile(
     index: ClimateIndex,
-    qd: QueryDistances,
+    q: Query,
     z: int,
     x: int,
     y: int,
@@ -103,12 +103,12 @@ def render_tile(
     if not land.any():
         return EMPTY_PNG
     top = np.full(pos.shape, 100.0)
-    top[land] = qd.top_pct(qd.d2[pos[land]], exclude_km)
+    top[land] = q.top_pct(index.d2_at(q, pos[land]), exclude_km)  # only this tile's cells
     if not (top <= LEGEND_STOPS[0][0]).any():
         return EMPTY_PNG
     rgba = colorize(top)
     if exclude_km > 0:
-        clat, clon = center if center is not None else (index.lat[qd.qi], index.lon[qd.qi])
+        clat, clon = center if center is not None else (index.lat_of(q.qi), index.lon_of(q.qi))
         inside = land & (great_circle_km(clat, clon, lat[:, None], lon[None, :]) < exclude_km)
         rgba[inside, :3] = EXCLUDED_RGB
         rgba[inside, 3] = np.rint(rgba[inside, 3] * EXCLUDED_ALPHA_SCALE).astype(np.uint8)

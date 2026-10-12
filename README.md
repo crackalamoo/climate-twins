@@ -31,7 +31,7 @@ unzip -o data/naturalearth/admin1.zip -d data/naturalearth/
 # 3. Build the index (~30 s, ~3.4 GB peak RAM) -> data/processed/ (~1.8 GB)
 uv run climate-twins-build
 
-# 4. Serve the UI and API on 0.0.0.0:8000 (~1.0 GB RAM)
+# 4. Serve the UI and API on 0.0.0.0:8000 (~0.7 GB live, ~0.9 GB peak during a search)
 uv run climate-twins-serve
 ```
 

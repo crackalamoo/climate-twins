@@ -36,13 +36,15 @@ def brute_force_nms(
     qp = idx.model.project(np.stack(variants)).astype(np.float64)
     pcs = idx.pcs.astype(np.float64)
     d2 = np.min([((pcs - q) ** 2).sum(axis=1) for q in qp], axis=0)
+    every = np.arange(len(idx))
+    lats, lons = idx.lat_of(every), idx.lon_of(every)
     picked: list[int] = []
     for i in np.argsort(d2, kind="stable"):
         if len(picked) == n:
             break
-        if great_circle_km(lat, lon, idx.lat[i], idx.lon[i]) < exclude_km:
+        if great_circle_km(lat, lon, lats[i], lons[i]) < exclude_km:
             continue
-        if any(great_circle_km(idx.lat[i], idx.lon[i], idx.lat[j], idx.lon[j]) < suppress_km for j in picked):
+        if any(great_circle_km(lats[i], lons[i], lats[j], lons[j]) < suppress_km for j in picked):
             continue
         picked.append(int(i))
     return picked
@@ -69,12 +71,12 @@ def fine_index(base_index: ClimateIndex) -> ClimateIndex:
 class TestLocate:
     def test_exact_cell(self, base_index: ClimateIndex):
         for i in [0, 17, len(base_index) // 2, len(base_index) - 1]:
-            j, km = base_index.locate(float(base_index.lat[i]), float(base_index.lon[i]))
+            j, km = base_index.locate(float(base_index.lat_of(i)), float(base_index.lon_of(i)))
             assert j == i and km == pytest.approx(0.0, abs=1e-6)
 
     def test_point_inside_cell_snaps_to_it(self, base_index: ClimateIndex):
         i, km = base_index.locate(45.15, -98.9)
-        assert (base_index.lat[i], base_index.lon[i]) == QUERY
+        assert (base_index.lat_of(i), base_index.lon_of(i)) == QUERY
         assert 0 < km < 25
 
     def test_offshore_snaps_to_nearest_coast(self, base_index: ClimateIndex):
@@ -82,14 +84,15 @@ class TestLocate:
         with pytest.raises(NoLandError):
             base_index.locate(61.0, -99.0)
         i, km = base_index.locate(61.0, -99.0, max_km=300)
-        assert (base_index.lat[i], base_index.lon[i]) == (59.0, -99.0)
+        assert (base_index.lat_of(i), base_index.lon_of(i)) == (59.0, -99.0)
         assert km == pytest.approx(2 * 111.195, rel=1e-3)
 
     def test_fine_grid_offshore_snaps_to_nearby_land(self, fine_index: ClimateIndex):
-        north = fine_index.lat.max()
-        lon = float(fine_index.lon[np.argmax(fine_index.lat)])
+        lats = fine_index.lat_of(np.arange(len(fine_index)))
+        north = lats.max()
+        lon = float(fine_index.lon_of(np.argmax(lats)))
         i, km = fine_index.locate(north + 0.15, lon)  # ~3.6 cells north of the island
-        assert fine_index.lat[i] == north and fine_index.lon[i] == lon
+        assert fine_index.lat_of(i) == north and fine_index.lon_of(i) == lon
         assert km == pytest.approx(0.15 * 111.195, rel=1e-3)
 
     def test_fine_grid_snaps_across_dateline(self, fine_index: ClimateIndex):
@@ -247,20 +250,31 @@ def test_pick_with_exact_ties_equals_brute_force(monkeypatch, world: World, init
 # -- query cache ---------------------------------------------------------------------
 
 
-def test_distances_read_only_and_min_over_alignments(world: World):
+def test_scan_read_only_and_min_over_alignments(world: World):
     idx = world.index()
     qi = world.pos(*QUERY)
-    a = idx.distances(qi, "auto")
-    assert not a.d2.flags.writeable and not a.reference().flags.writeable
-    assert np.all(a.d2 <= idx.distances(qi, "calendar").d2 + 1e-4)  # auto takes the min over alignments
-    np.testing.assert_array_equal(a.reference(), np.sort(a.d2[idx.sample]))
+    q = idx.query(qi, "auto")
+    d2 = idx.scan(q)
+    assert not d2.flags.writeable and not q.reference().flags.writeable and not q.sample_d2.flags.writeable
+    assert d2.dtype == q.sample_d2.dtype == idx.d2_at(q, [0, 1]).dtype == idx.pcs.dtype  # no float64 copies
+    assert np.all(d2 <= idx.scan(idx.query(qi, "calendar")) + 1e-4)  # auto takes the min over alignments
+    np.testing.assert_array_equal(q.reference(), np.sort(idx.d2_at(q, idx.sample)))
+    np.testing.assert_allclose(q.sample_d2, d2[idx.sample], rtol=1e-5, atol=1e-6)
+
+
+def test_only_the_latest_scan_is_kept(world: World):
+    idx = world.index()
+    for lat, lon in [QUERY, SOUTH, FAR]:
+        idx.similar(lat, lon, n=2)
+    assert len(idx.scan_cache) == index_mod.SCAN_CACHE_SIZE == 1
+    assert len(idx.query_cache) == 3
 
 
 def test_percentiles_are_relative_to_land_beyond_exclusion(world: World):
     """Excluding the query's surroundings removes them from the reference, so the same
     distance ranks as more exceptional; an exclusion covering everything falls back."""
     idx = world.index()
-    qd = idx.distances(world.pos(*QUERY))
+    qd = idx.query(world.pos(*QUERY))
     far = qd.sample_km >= 1500
     assert 0 < far.sum() < len(far)
     np.testing.assert_array_equal(qd.reference(1500), np.sort(qd.sample_d2[far]))
@@ -273,9 +287,9 @@ def test_similar_percentile_uses_exclusion(world: World):
     idx = world.index()
     for ex in (0, 1500):
         res = idx.similar(*QUERY, n=3, exclude_km=ex)
-        qd = idx.distances(world.pos(*QUERY))
+        q = idx.query(world.pos(*QUERY))
         for m in res["matches"]:
-            want = 100.0 - float(qd.top_pct(qd.d2[m["cell"]["index"]], ex))
+            want = 100.0 - float(q.top_pct(idx.scan(q)[m["cell"]["index"]], ex))
             assert m["more_similar_than_pct_of_land"] == pytest.approx(want, abs=1e-3)
 
 
@@ -288,6 +302,7 @@ def test_similar_identical_with_and_without_cache(world: World):
         for kw in [{}, {"align": "calendar"}, {"n": 50, "exclude_km": 0, "suppress_km": 0}]:
             assert warm.similar(lat, lon, detail=True, **kw) == cold.similar(lat, lon, detail=True, **kw)
             cold.query_cache = index_mod.QueryCache(index_mod.QUERY_CACHE_SIZE)
+            cold.scan_cache = index_mod.QueryCache(index_mod.SCAN_CACHE_SIZE)
 
 
 def test_query_cache_lru_eviction():

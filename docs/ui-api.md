@@ -6,9 +6,12 @@ the API. All endpoints are GET and return JSON unless noted.
 ## Query identity
 
 A "query" means `(lat, lon, align)`. The server snaps `lat/lon` to the nearest land
-cell and computes a distance for every land cell once. That result is cached (LRU,
-a handful of entries, keyed by `(cell index, align)`) and shared by `/similar` and
-`/tiles` for the same query.
+cell. Per query (keyed by `(cell index, align)`) it caches what every request needs,
+~2 MB: the query's projected vectors and its percentile reference, a sample of land
+(LRU, 16 queries). `/similar` also needs the distance to every land cell, ~36 MB; only
+the latest is kept, so moving the sliders on one query doesn't recompute it. A tile
+computes distances for just the cells under its pixels (a few ms), so tiles never
+depend on that scan and visitors browsing at once don't evict each other's.
 
 ## Existing endpoints (extended)
 
@@ -37,7 +40,7 @@ Each match has:
 `GET /climate?lat&lon`: as before, plus a `place` field (for the requested `lat/lon`).
 
 `GET /health`: as before, plus `places` (number of GeoNames places loaded; 0 when
-place names are unavailable) and `query_cache_entries`.
+place names are unavailable), `query_cache_entries` and `scan_cache_entries`.
 
 Errors: 404 (not on land or within 25 km of it), 422 (bad params), with
 `{"detail": "..."}`.

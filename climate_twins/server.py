@@ -82,6 +82,7 @@ def health(request: Request) -> dict:
         "places": len(request.app.state.places) if request.app.state.places is not None else 0,
         "boundaries": len(places.boundaries) if (places := request.app.state.places) and places.boundaries else 0,
         "query_cache_entries": len(index.query_cache),
+        "scan_cache_entries": len(index.scan_cache),
         "load_seconds": request.app.state.load_seconds,
     }
 
@@ -155,7 +156,7 @@ def tile(
         qi, _ = index.locate(lat, lon)
     except NoLandError as e:
         raise no_land(e) from e
-    png = tiles.render_tile(index, index.distances(qi, align), z, x, y, exclude_km, center=(lat, lon))
+    png = tiles.render_tile(index, index.query(qi, align), z, x, y, exclude_km, center=(lat, lon))
     return Response(content=png, media_type="image/png", headers={"Cache-Control": TILE_CACHE_CONTROL})
 
 

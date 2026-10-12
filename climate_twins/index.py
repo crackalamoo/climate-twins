@@ -23,8 +23,22 @@ DEFAULT_EXCLUDE_KM = 1500.0
 INITIAL_CANDIDATES = 4096
 PICK_CHUNK = 1024
 MONTHLY_VARS = ("tmax", "tmin", "dewpoint", "ppt", "srad", "clearness", "ws")
-QUERY_CACHE_SIZE = 8  # each entry holds a float32 per land cell (~36 MB for the real index)
-MAX_REFERENCES = 32  # per cached query: one per exclusion radius used
+# Per query, tiles need only its projected vectors and its percentile reference (a sample of
+# land), ~2 MB: enough are kept for everyone browsing at once. /similar needs the distance to
+# every land cell (a float32 each, ~36 MB): only the latest is kept, for slider tweaks.
+QUERY_CACHE_SIZE = 16
+SCAN_CACHE_SIZE = 1
+MAX_REFERENCES = 8  # per cached query: one per exclusion radius used
+
+
+def _d2(qp: np.ndarray, qq: np.ndarray, pcs: np.ndarray, norms: np.ndarray) -> np.ndarray:
+    """Squared distance from each row of pcs to the nearest of the projected query vectors qp:
+    |x|^2 - 2x.q + |q|^2, the min over them, clipped at 0 (float32 rounding)."""
+    # float(): a NumPy float64 scalar would promote the float32 result to float64 (twice the memory).
+    d2 = np.asarray(norms - 2 * (pcs @ qp[0]) + float(qq[0]))  # an array even for a single cell
+    for q, q2 in zip(qp[1:], qq[1:]):
+        np.minimum(d2, norms - 2 * (pcs @ q) + float(q2), out=d2)
+    return np.maximum(d2, 0.0, out=d2)
 
 
 class NoLandError(LookupError):
@@ -49,14 +63,15 @@ def climate_summary(p: Mapping[str, np.ndarray]) -> dict:
 
 
 @dataclass(frozen=True)
-class QueryDistances:
-    """Squared climate distance from one query cell to every land cell (read-only arrays)."""
+class Query:
+    """One query cell, ready to measure climate distances from (read-only arrays). Distances to
+    cells come from ClimateIndex.d2_at (a few: a tile's) or ClimateIndex.scan (every land cell)."""
 
     qi: int
     align: Align
     variants: np.ndarray  # (v, d) full query vectors: as-is, then seasons shifted
     qp: np.ndarray  # (v, k) their PCA projections
-    d2: np.ndarray  # (cells,) min over variants
+    qq: np.ndarray  # (v,) their squared norms
     sample_d2: np.ndarray  # d2 of each cell in the area-weighted sample, for percentiles
     sample_km: np.ndarray  # km from the query cell to each sample cell
     _refs: dict = field(default_factory=dict, repr=False, compare=False)
@@ -86,15 +101,15 @@ class QueryDistances:
 
 
 class QueryCache:
-    """Thread-safe LRU of QueryDistances; concurrent misses on one key compute it once."""
+    """Thread-safe LRU; concurrent misses on one key compute it once."""
 
     def __init__(self, size: int):
         self.size = size
-        self._items: OrderedDict[tuple, QueryDistances] = OrderedDict()
+        self._items: OrderedDict[tuple, object] = OrderedDict()
         self._lock = threading.Lock()
         self._key_locks: dict[tuple, threading.Lock] = {}
 
-    def get(self, key: tuple, compute) -> QueryDistances:
+    def get(self, key: tuple, compute):
         with self._lock:
             if key in self._items:
                 self._items.move_to_end(key)
@@ -145,9 +160,8 @@ class ClimateIndex:
         self.sample = sample
         self.meta = dict(meta or {})
         self.norms = np.einsum("ij,ij->i", pcs, pcs)
-        self.lat = grid.lat_of(cells)
-        self.lon = grid.lon_of(cells)
         self.query_cache = QueryCache(QUERY_CACHE_SIZE)
+        self.scan_cache = QueryCache(SCAN_CACHE_SIZE)
 
     @classmethod
     def load(cls, path: Path) -> "ClimateIndex":
@@ -167,11 +181,19 @@ class ClimateIndex:
     def __len__(self) -> int:
         return len(self.cells)
 
+    # Cell positions, computed from the cell ids when asked: storing them for every cell would
+    # take 138 MB, and every use needs only a few.
+    def lat_of(self, idx) -> np.ndarray:
+        return self.grid.lat_of(self.cells[idx])
+
+    def lon_of(self, idx) -> np.ndarray:
+        return self.grid.lon_of(self.cells[idx])
+
     # -- per-cell data -------------------------------------------------------
 
     def physical(self, idx: np.ndarray) -> dict[str, np.ndarray]:
         idx = np.atleast_1d(idx)
-        return physical({v: self.raw[v][idx] for v in RAW_VARS}, self.codecs, self.lat[idx])
+        return physical({v: self.raw[v][idx] for v in RAW_VARS}, self.codecs, self.lat_of(idx))
 
     def vectors(self, idx: np.ndarray) -> np.ndarray:
         return self.model.vectors(perceptual(self.physical(idx)))
@@ -187,7 +209,7 @@ class ClimateIndex:
         pos = np.minimum(np.searchsorted(self.cells, flat), len(self.cells) - 1)
         cand = pos[self.cells[pos] == flat]
         if cand.size:
-            d = great_circle_km(lat, lon, self.lat[cand], self.lon[cand])
+            d = great_circle_km(lat, lon, self.lat_of(cand), self.lon_of(cand))
             j = int(np.argmin(d))
             if d[j] <= max_km:
                 return int(cand[j]), float(d[j])
@@ -228,8 +250,8 @@ class ClimateIndex:
         northern location (and vice versa) are found without any equator rule.
         """
         qi, snap_km = self.locate(lat, lon)
-        qd = self.distances(qi, align)
-        qp, d2 = qd.qp, qd.d2
+        q = self.query(qi, align)
+        qp, d2 = q.qp, self.scan(q)
         picked = self._pick(d2, lat, lon, n, exclude_km, suppress_km)
 
         q_phys = {k: v[0] for k, v in self.physical(qi).items()}
@@ -243,11 +265,11 @@ class ClimateIndex:
                 {
                     "rank": rank,
                     "cell": self._cell_json(i),
-                    "km_from_query": round(float(great_circle_km(lat, lon, self.lat[i], self.lon[i])), 0),
+                    "km_from_query": round(float(great_circle_km(lat, lon, self.lat_of(i), self.lon_of(i))), 0),
                     "distance": round(float(np.sqrt(per_variant.min())), 4),
-                    "more_similar_than_pct_of_land": round(100.0 - float(qd.top_pct(d2[i], exclude_km)), 3),
+                    "more_similar_than_pct_of_land": round(100.0 - float(q.top_pct(d2[i], exclude_km)), 3),
                     "seasons_shifted_6_months": shifted,
-                    "difference_share": self._difference_share(qd.variants[int(shifted)], i),
+                    "difference_share": self._difference_share(q.variants[int(shifted)], i),
                     **self._climate_json(i, detail),
                 }
             )
@@ -264,23 +286,35 @@ class ClimateIndex:
             "matches": matches,
         }
 
-    def distances(self, qi: int, align: Align = "auto") -> QueryDistances:
-        """Distances from land cell qi to every land cell, cached per (qi, align)."""
-        return self.query_cache.get((int(qi), align), lambda: self._compute_distances(int(qi), align))
+    def query(self, qi: int, align: Align = "auto") -> Query:
+        """Query cell qi, cached per (qi, align)."""
+        return self.query_cache.get((int(qi), align), lambda: self._make_query(int(qi), align))
 
-    def _compute_distances(self, qi: int, align: Align) -> QueryDistances:
+    def _make_query(self, qi: int, align: Align) -> Query:
         qvec = self.vectors(qi)[0]
         variants = np.stack([qvec, shift_seasons(qvec)] if align == "auto" else [qvec])
         qp = self.model.project(variants)
-        d2 = self.norms - 2 * (self.pcs @ qp[0]) + float(qp[0] @ qp[0])
-        for q in qp[1:]:
-            np.minimum(d2, self.norms - 2 * (self.pcs @ q) + float(q @ q), out=d2)
-        np.maximum(d2, 0.0, out=d2)
-        sample_d2 = d2[self.sample]
-        sample_km = great_circle_km(self.lat[qi], self.lon[qi], self.lat[self.sample], self.lon[self.sample])
-        for a in (variants, qp, d2, sample_d2, sample_km):
+        qq = np.array([float(v @ v) for v in qp])
+        sample_d2 = _d2(qp, qq, self.pcs[self.sample], self.norms[self.sample])
+        sample_lat, sample_lon = self.lat_of(self.sample), self.lon_of(self.sample)
+        sample_km = great_circle_km(self.lat_of(qi), self.lon_of(qi), sample_lat, sample_lon).astype(np.float32)
+        for a in (variants, qp, qq, sample_d2, sample_km):
             a.flags.writeable = False
-        return QueryDistances(qi, align, variants, qp, d2, sample_d2, sample_km)
+        return Query(qi, align, variants, qp, qq, sample_d2, sample_km)
+
+    def d2_at(self, q: Query, pos: np.ndarray) -> np.ndarray:
+        """Squared climate distance from q to the cells at pos (the min over q's alignments)."""
+        return _d2(q.qp, q.qq, self.pcs[pos], self.norms[pos])
+
+    def scan(self, q: Query) -> np.ndarray:
+        """d2_at every land cell (read-only), cached per (qi, align)."""
+
+        def compute():
+            d2 = _d2(q.qp, q.qq, self.pcs, self.norms)
+            d2.flags.writeable = False
+            return d2
+
+        return self.scan_cache.get((q.qi, q.align), compute)
 
     def _pick(
         self, d2: np.ndarray, lat: float, lon: float, n: int, exclude_km: float, suppress_km: float
@@ -304,7 +338,7 @@ class ClimateIndex:
             hi = float(np.partition(d2, k)[k]) if k < total else np.inf
             band = np.flatnonzero((d2 >= lo) & (d2 < hi))
             band = band[np.argsort(d2[band], kind="stable")]
-            xyz = unit_vectors(self.lat[band], self.lon[band])
+            xyz = unit_vectors(self.lat_of(band), self.lon_of(band))
             if exclude_km > 0:
                 far = xyz @ query <= cos_exclude
                 band, xyz = band[far], xyz[far]
@@ -337,7 +371,7 @@ class ClimateIndex:
         return {f: round(float(x / total), 3) for f, x in zip(FEATURES, per)}
 
     def _cell_json(self, i: int) -> dict:
-        return {"index": int(i), "lat": round(float(self.lat[i]), 4), "lon": round(float(self.lon[i]), 4)}
+        return {"index": int(i), "lat": round(float(self.lat_of(i)), 4), "lon": round(float(self.lon_of(i)), 4)}
 
     def _climate_json(self, i: int, detail: bool) -> dict:
         p = {k: v[0] for k, v in self.physical(i).items()}
