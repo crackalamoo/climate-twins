@@ -47,6 +47,12 @@ export function fmtAnnualPrecip(mm) {
   return us() ? `${precip(mm).toFixed(1)} in` : `${Math.round(mm)} mm`;
 }
 
+/** A wind speed (m/s in): km/h, matching the toggle's km, or mph, to 1 decimal. */
+export function fmtWind(ms) {
+  const kmh = ms * 3.6;
+  return us() ? `${(kmh / KM_PER_MI).toFixed(1)} mph` : `${kmh.toFixed(1)} km/h`;
+}
+
 /** A distance; `step` rounds to the nearest multiple of it (in the display unit). */
 export function fmtDistance(km, { step = 1 } = {}) {
   const v = us() ? km / KM_PER_MI : km;

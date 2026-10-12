@@ -2,7 +2,7 @@
 
 import * as Plot from "https://cdn.jsdelivr.net/npm/@observablehq/plot@0.6.17/+esm";
 import { DAYS_PER_MONTH, PRECIP_STOPS, TEMP_STOPS, gradientStops } from "./ramps.js";
-import { fmtAnnualPrecip, fmtPrecip, fmtTemp, precip, precipUnit, temp, tempUnit } from "./units.js";
+import { fmtAnnualPrecip, fmtPrecip, fmtTemp, fmtWind, precip, precipUnit, temp, tempUnit } from "./units.js";
 
 // Colour says which place (the query's blue, the match's pin colour). The climate ramps (ramps.js)
 // are a faint wash behind each chart, so the plot area itself reads as cold/hot or dry/wet.
@@ -27,6 +27,7 @@ const SUMMARY_ROWS = [
   ["annual_precip_mm", "Annual precipitation", fmtAnnualPrecip],
   ["muggiest_month_dewpoint_c", "Muggiest-month dewpoint", fmtTemp],
   ["mean_clearness", "Sky clearness", (v) => v.toFixed(2)],
+  ["mean_wind_m_s", "Average wind", fmtWind],
 ];
 
 /** One-line headline stats, used under the query title. */
