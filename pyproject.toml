@@ -3,6 +3,7 @@ name = "climate-twins"
 version = "0.1.0"
 description = "Find places whose climate resembles a given location, from TerraClimate 1991-2020 normals."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.142.2",
