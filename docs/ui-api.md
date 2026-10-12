@@ -68,9 +68,9 @@ fame signal:
 1. A **city of 100,000+** people within 500 km of the cell, chosen by size against
    distance: the highest population / (km + 15)³. A big city a bit farther beats a
    smaller one nearby, but a metropolis doesn't win from hundreds of km away.
-2. Otherwise just the **region**: the admin1 region and country of the nearest
-   GeoNames place (any size) within 500 km, e.g. `"in Western Australia, Australia"`.
-3. Otherwise `null`.
+2. Otherwise just the **region** the cell is in (its `area`, below), e.g.
+   `"in Western Australia, Australia"`, or the country alone where the region is unknown.
+3. Otherwise (no `area`) `null`.
 
 The region (admin1) only appears in labels where it helps:
 - Not in countries whose regions are obscure outside them (`REGIONLESS_COUNTRIES`
@@ -81,9 +81,7 @@ The region (admin1) only appears in labels where it helps:
   `"Kabul, Kabul, Afghanistan"`; the same for `"Krasnoyarsk Krai"`,
   `"St.-Petersburg"` and other spellings of the name GeoNames lists (`"Cuzco"`).
 - Not when it is only a direction (`"Centre"`, `"Northern Region"`).
-A region-only label takes the most common region among the 10 nearest places, so
-one miscoded village can't relabel an area. `admin1` always holds the raw region,
-and search results always show it.
+`admin1` always holds the raw region, and search results always show it.
 
 Sections of a populated place (GeoNames feature code `PPLX`: suburbs and localities)
 are never used as labels, though search still finds them.
@@ -98,11 +96,27 @@ are never used as labels, though search still finds them.
   `base_label` is `"Western Australia, Australia"`, `name` is the region (or the
   country when admin1 is unknown), and `population`, `lat`, `lon` and `km` are `null`.
 
-`area` is where the cell itself is: `{admin1, country}`, the most common region among
-the 10 nearest places within 500 km, with `admin1` `null` where labels don't show
-regions (the rules above); `area` is `null` if there are no places that near. It can
-differ from the city's: the labelling city may be across a border or a sea, as in
+`area` is where the cell itself is: `{admin1, country}`, with `admin1` `null` where
+labels don't show regions (the rules above) or the region is unknown. It can differ
+from the city's: the labelling city may be across a border or a sea, as in
 `"210 km SW of Al Ḩudaydah, Yemen"` with `area` `{"admin1": null, "country": "Eritrea"}`.
+It's the name of the Natural Earth admin-1 polygon the cell is in (or, for a coastal
+cell just offshore, the nearest one within 0.25°), or `null` if there's none (open
+sea, the Caspian, a few tiny islands, or no boundary data). Each polygon is named in
+GeoNames' terms, using only names two sources agree on, never a majority of towns:
+- **Country**: the one all its GeoNames towns are filed under (3+ towns), so places
+  are named as GeoNames names them (Western Sahara, French Guiana); else Natural
+  Earth's (GeoNames admin1 code's country first, so a disputed region gets the
+  country GeoNames files its towns under). Neither (Somaliland, Siachen): `area` is `null`.
+- **Region**: the polygon's GeoNames admin1 code, if GeoNames gives that code the
+  polygon's own name (some codes are stale: Svalbard's NO.21 is now Trøndelag). Else
+  the region all its towns in that country are in (3+). Else unknown: labels show the
+  country alone.
+A region is the polygon's own or none, never a majority of nearby towns. Natural
+Earth predates some reforms, so a few areas get their former region (Papua for
+what's now Central Papua, Almaty Region for Zhetysu), never one they weren't in. The
+nearest towns aren't used at all: GeoNames maps some countries far more densely than
+their neighbours, so the towns nearest a cell in South Sudan are mostly in Uganda.
 The UI's short name for a place not in or near a city is `area.admin1` when the label
 names that region, else `area.country`.
 

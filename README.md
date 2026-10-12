@@ -21,6 +21,12 @@ for f in cities500.zip admin1CodesASCII.txt countryInfo.txt; do
   curl -fo data/geonames/$f "https://download.geonames.org/export/dump/$f"
 done
 unzip -o data/geonames/cities500.zip -d data/geonames/
+# and Natural Earth admin-1 boundaries (~15 MB): without them labels only name cities,
+# never which country or region a point itself is in
+mkdir -p data/naturalearth
+curl -fo data/naturalearth/admin1.zip \
+  https://naciscdn.org/naturalearth/10m/cultural/ne_10m_admin_1_states_provinces.zip
+unzip -o data/naturalearth/admin1.zip -d data/naturalearth/
 
 # 3. Build the index (~30 s, ~3.4 GB peak RAM) -> data/processed/ (~1.8 GB)
 uv run climate-twins-build
@@ -64,4 +70,5 @@ curl 'localhost:8000/similar?lat=37.77&lon=-122.42&n=5'
 - Normals only: nothing about variability, extremes or storms.
 - Place labels name a nearby large city, not the cell itself (rules in
   `docs/ui-api.md`). Names are from [GeoNames](https://www.geonames.org/)
-  (CC BY 4.0).
+  (CC BY 4.0); which country a point is in, from [Natural Earth](https://www.naturalearthdata.com/)
+  (public domain).

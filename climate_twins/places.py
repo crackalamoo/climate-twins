@@ -3,6 +3,7 @@
 Reads three files from https://download.geonames.org/export/dump/ (see README):
 cities500.txt, admin1CodesASCII.txt and countryInfo.txt. Parsed once into a compact
 places.npz cache next to them, which is rebuilt whenever a source file is newer.
+Where a point is (its country and region) comes from boundary polygons (boundaries.py).
 """
 
 import bisect
@@ -16,6 +17,7 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial import cKDTree
 
+from .boundaries import Boundaries
 from .geo import EARTH_RADIUS_KM, great_circle_km, unit_vectors
 
 log = logging.getLogger(__name__)
@@ -24,7 +26,7 @@ CITIES_FILE = "cities500.txt"
 ADMIN1_FILE = "admin1CodesASCII.txt"
 COUNTRY_FILE = "countryInfo.txt"
 CACHE_FILE = "places.npz"
-CACHE_VERSION = 4
+CACHE_VERSION = 6
 
 # Labels only name places people have heard of, and population is the best fame signal
 # in GeoNames: a city of CITY_MIN_POPULATION+ within CITY_KM, trading size against
@@ -33,10 +35,11 @@ CITY_MIN_POPULATION = 100_000
 CITY_KM = 500.0
 CITY_DISTANCE_OFFSET_KM = 15.0
 CITY_DISTANCE_POWER = 3
-REGION_KM = 500.0  # the region is that of the nearest place of any size within this
 NEAR_KM = 25.0  # closer than this to the city, the label is "near <city>"
 SPELLING_SIMILARITY = 0.75  # an alternate name this close to the name is another spelling of it
-REGION_VOTERS = 10  # a region-only label takes the most common region of this many nearest places
+# Naming boundary polygons (Places._polygon_areas): the towns inside one name its country, or
+# a region it has no usable code for, only if there are at least this many and every one agrees.
+POLYGON_MIN_TOWNS = 3
 
 # Labels show a place's admin1 region only where it helps a typical reader: not in
 # countries whose regions are obscure outside them (the country alone says as much),
@@ -77,9 +80,13 @@ COMPASS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
 _STR_FIELDS = ("name", "asciiname", "admin1", "country")
 
 
+# Letters NFKD doesn't decompose into a base letter and a mark ("Bakı", "Łódź").
+_UNDECOMPOSED = str.maketrans({"ı": "i", "ł": "l", "Ł": "l", "ø": "o", "Ø": "o", "đ": "d", "Đ": "d", "ħ": "h"})
+
+
 def normalize(text: str) -> str:
     """Case- and accent-insensitive search key: NFKD, drop combining marks, casefold."""
-    decomposed = unicodedata.normalize("NFKD", text)
+    decomposed = unicodedata.normalize("NFKD", text.translate(_UNDECOMPOSED))
     return "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
 
 
@@ -111,6 +118,17 @@ def region_is_generic(region: str) -> bool:
     """True for regions named only by direction: "Centre", "Northern Region", "North-West"."""
     words = _name_words(region)
     return bool(words) and all(w in _GENERIC_REGION_WORDS for w in words)
+
+
+def _unanimous(values: list[str]) -> str | None:
+    """The value all of values are, if there are POLYGON_MIN_TOWNS+ of them."""
+    return values[0] if len(values) >= POLYGON_MIN_TOWNS and len(set(values)) == 1 else None
+
+
+def _region_key(name: str) -> str:
+    """A region's name for comparison: "Astrakhan'" and "Astrakhan Oblast", "Sakha (Yakutia)"
+    and "Sakha", "Bakı" and "Baki" are the same."""
+    return " ".join(w for w in _name_words(name.split("(")[0]) if w not in _ADMIN_WORDS)
 
 
 def _chord(km: float) -> float:
@@ -157,6 +175,9 @@ def _parse(directory: Path) -> dict[str, np.ndarray]:
             cols["population"].append(pop)
             cols["labels"].append(f[7] not in NOT_LABEL_FEATURE_CODES)
     out = {k: _pack(cols[k]) for k in (*_STR_FIELDS, "alt_names")}
+    # Name tables by code, for the codes boundary polygons give ("US.CA" -> "California", "US").
+    out["admin1_codes"], out["admin1_names"] = _pack(list(admin1)), _pack(list(admin1.values()))
+    out["country_codes"], out["country_names"] = _pack(list(countries)), _pack(list(countries.values()))
     out["country_code"] = np.array(cols["country_code"], dtype="U2")
     out["lat"] = np.array(cols["lat"], dtype=np.float64)
     out["lon"] = np.array(cols["lon"], dtype=np.float64)
@@ -219,8 +240,10 @@ def _load_columns(directory: Path) -> dict[str, np.ndarray]:
 class Places:
     """GeoNames populated places with a spatial index and a name-prefix index."""
 
-    def __init__(self, cols: dict[str, np.ndarray]):
+    def __init__(self, cols: dict[str, np.ndarray], boundaries: Boundaries | None = None):
         self.name, self.asciiname, self.admin1, self.country = (_unpack(cols[k]) for k in _STR_FIELDS)
+        self.admin1_by_code = dict(zip(_unpack(cols["admin1_codes"]), _unpack(cols["admin1_names"])))
+        self.country_by_code = dict(zip(_unpack(cols["country_codes"]), _unpack(cols["country_names"])))
         self.country_code = cols["country_code"].tolist()
         self.lat, self.lon = cols["lat"], cols["lon"]
         self.population = cols["population"]
@@ -231,6 +254,8 @@ class Places:
             len(a) == n for a in (self.name, self.asciiname, self.admin1, self.country, self.alt_names, self.country_code)
         )
         self.tree = cKDTree(unit_vectors(self.lat, self.lon))
+        self.boundaries = boundaries
+        self.polygon_areas = self._polygon_areas() if boundaries is not None else []
 
         # One key per distinct normalized name or ASCII name of each place.
         keys: list[tuple[str, int]] = []
@@ -249,13 +274,14 @@ class Places:
         self._key_rank = rank[self._key_place]
 
     @classmethod
-    def load(cls, directory: Path) -> "Places | None":
-        """Places from a GeoNames directory, or None (with a warning) if files are missing."""
+    def load(cls, directory: Path, boundaries: Boundaries | None = None) -> "Places | None":
+        """Places from a GeoNames directory, or None (with a warning) if files are missing.
+        Labels only say which country and region a point is in (`area`) with boundaries."""
         missing = [f for f in (CITIES_FILE, ADMIN1_FILE, COUNTRY_FILE) if not (directory / f).is_file()]
         if missing:
             log.warning("GeoNames files missing from %s (%s): place names disabled", directory, ", ".join(missing))
             return None
-        return cls(_load_columns(directory))
+        return cls(_load_columns(directory), boundaries)
 
     def __len__(self) -> int:
         return len(self.lat)
@@ -279,26 +305,58 @@ class Places:
         score = self.population[idx] / (km + CITY_DISTANCE_OFFSET_KM) ** CITY_DISTANCE_POWER
         return int(idx[np.argmax(score)])
 
-    def locate(self, lat: float, lon: float) -> int | None:
-        """A place standing for the region and country (lat, lon) is in: the most common
-        (country, admin1) among the nearest places within REGION_KM, or None. A majority, as
-        GeoNames has a few miscoded villages (e.g. Tibetan hamlets filed under Hebei)."""
-        idx, km = self._within(lat, lon, REGION_KM)
-        if idx.size == 0:
-            return None
-        nearest = idx[np.argsort(km)[:REGION_VOTERS]]
-        votes: dict[tuple[str, str], int] = {}
-        for i in nearest:  # ties go to the nearer place, since dicts keep insertion order
-            key = (self.country_code[i], self.admin1[i])
-            votes[key] = votes.get(key, 0) + 1
-        cc, admin1 = max(votes, key=votes.get)
-        return next(int(j) for j in nearest if (self.country_code[j], self.admin1[j]) == (cc, admin1))
+    def _polygon_areas(self) -> list[tuple[str, str] | None]:
+        """Each boundary polygon's (country code, GeoNames admin1 region or ""), or None if its
+        country is unknown. Only names two sources agree on, never a majority:
+        - Country: the one all of its GeoNames towns are filed under (POLYGON_MIN_TOWNS+ of
+          them), so places are named as GeoNames names them (Western Sahara, French Guiana);
+          else Natural Earth's.
+        - Region: its GeoNames admin1 code, if GeoNames gives that code the polygon's own name
+          (a stale code names some other region: Svalbard's NO.21 is now Trøndelag). Else the
+          one all of its towns in that country are in (POLYGON_MIN_TOWNS+; towns GeoNames gives
+          no region don't count); else "" (labels show the country).
+        Never a majority of towns: a region is the polygon's own or none. Natural Earth predates
+        some reforms, so a few areas get their former region (Papua for what's now Central
+        Papua, Almaty Region for Zhetysu), never one they weren't in."""
+        b = self.boundaries
+        polygon = b.polygons_containing(self.lat, self.lon)
+        towns: dict[int, list[int]] = {}
+        for i in np.flatnonzero((polygon >= 0) & self.labels):
+            towns.setdefault(int(polygon[i]), []).append(int(i))
+        areas: list[tuple[str, str] | None] = []
+        for j in range(len(b)):
+            inside = towns.get(j, [])
+            cc = _unanimous([self.country_code[i] for i in inside]) or b.country_codes[j]
+            if cc is None:
+                areas.append(None)
+                continue
+            coded = self._admin1_named(b.admin1_codes[j], cc, b.names[j])
+            regions = [self.admin1[i] for i in inside if self.country_code[i] == cc and self.admin1[i]]
+            region = coded if coded is not None else _unanimous(regions) or ""
+            areas.append((cc, region))
+        return areas
 
-    def _area(self, i: int | None) -> dict | None:
-        """The region and country place i (from locate) is in; the region only where labels show it."""
-        if i is None:
+    def _admin1_named(self, code: str | None, cc: str, names: tuple[str, ...]) -> str | None:
+        """GeoNames' region for admin1 code, if it's in country cc and is one of names
+        (ignoring words like "Province"): a stale code names some other region."""
+        region = self.admin1_by_code.get(code or "")
+        if region is None or not code.startswith(cc + "."):
             return None
-        return {"admin1": (self.admin1[i] if self._shows_region(i) else "") or None, "country": self.country[i] or None}
+        return region if _region_key(region) in {_region_key(n) for n in names} - {""} else None
+
+    def locate(self, lat: float, lon: float) -> tuple[str, str] | None:
+        """(country code, admin1 region name or "") of where (lat, lon) is: those of the boundary
+        polygon it's in (_polygon_areas). None without one (open sea, no boundary data)."""
+        j = self.boundaries.polygon_at(lat, lon) if self.boundaries is not None else None
+        return self.polygon_areas[j] if j is not None else None
+
+    def _area(self, here: tuple[str, str] | None) -> dict | None:
+        """The region and country from locate, the region only where labels show it."""
+        if here is None:
+            return None
+        cc, admin1 = here
+        shown = admin1 if self._shows_region(cc, admin1) else ""
+        return {"admin1": shown or None, "country": self.country_by_code.get(cc) or None}
 
     def label_for(self, lat: float, lon: float) -> dict | None:
         """The Place label (see docs/ui-api.md) for a point, or None if nothing is near."""
@@ -320,12 +378,13 @@ class Places:
         # point itself is, which can differ from the city's region or country (across a border).
         return {**place, "km": round(km, 1), "tier": tier, "direction": direction, "label": label, "area": self._area(here)}
 
-    def _region_label(self, i: int | None) -> dict | None:
-        """No city near: name only the region and country the point is in (place i, from locate)."""
-        if i is None:
+    def _region_label(self, here: tuple[str, str] | None) -> dict | None:
+        """No city near: name only the region and country the point is in (from locate)."""
+        if here is None:
             return None
-        cc, admin1, country = self.country_code[i], self.admin1[i], self.country[i]
-        shown = admin1 if self._shows_region(i) else ""
+        cc, admin1 = here
+        country = self.country_by_code.get(cc, "")
+        shown = admin1 if self._shows_region(cc, admin1) else ""
         base = ", ".join(p for p in dict.fromkeys((shown, country)) if p)
         if not base:
             return None
@@ -342,24 +401,22 @@ class Places:
             "direction": None,
             "base_label": base,
             "label": f"in {base}",
-            "area": self._area(i),
+            "area": self._area(here),
         }
 
-    def _shows_region(self, i: int, city: str | None = None) -> bool:
-        """Whether labels show place i's admin1 region (see REGIONLESS_COUNTRIES)."""
-        admin1 = self.admin1[i]
-        if not admin1 or self.country_code[i] in REGIONLESS_COUNTRIES or region_is_generic(admin1):
+    def _shows_region(self, cc: str, admin1: str, city: str | None = None, spellings: tuple[str, ...] = ()) -> bool:
+        """Whether labels show an admin1 region of country cc (see REGIONLESS_COUNTRIES): with a
+        city, also not when the region repeats the city's name (or one of its spellings)."""
+        if not admin1 or cc in REGIONLESS_COUNTRIES or region_is_generic(admin1):
             return False
-        if city is None:
-            return True
-        spellings = (self.asciiname[i], *self.alt_names[i].split("|"))
-        return not region_repeats_city(admin1, city, *spellings)
+        return city is None or not region_repeats_city(admin1, city, *spellings)
 
     def describe(self, i: int, for_label: bool = False) -> dict:
         """Place i's fields. Search results always show the region in base_label; labels
         only where it helps (for_label, see _shows_region)."""
         name, admin1, country = self.name[i], self.admin1[i], self.country[i]
-        shown = admin1 if not for_label or self._shows_region(i, name) else ""
+        spellings = (self.asciiname[i], *self.alt_names[i].split("|"))
+        shown = admin1 if not for_label or self._shows_region(self.country_code[i], admin1, name, spellings) else ""
         parts: list[str] = []
         for p in (name, shown, country):
             if p and p not in parts:

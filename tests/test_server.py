@@ -10,20 +10,22 @@ from climate_twins.features import VARIANCE_TARGET
 from climate_twins.index import MONTHLY_VARS
 from climate_twins.server import app
 
-from .conftest import NC_QUERY, NC_TWIN
+from .conftest import BOUNDARY_POLYGONS, NC_QUERY, NC_TWIN
 
 
-def make_client(data: Path, geonames: Path) -> Iterator[TestClient]:
+def make_client(data: Path, geonames: Path, boundaries: Path | None = None) -> Iterator[TestClient]:
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("CLIMATE_TWINS_DATA", str(data))
         mp.setenv("CLIMATE_TWINS_GEONAMES", str(geonames))
+        # Without boundaries, a directory with no shapefile: never the real data/naturalearth.
+        mp.setenv("CLIMATE_TWINS_BOUNDARIES", str(boundaries or geonames))
         with TestClient(app) as c:
             yield c
 
 
 @pytest.fixture(scope="module")
-def client(built: tuple[Path, dict], geonames_dir: Path) -> Iterator[TestClient]:
-    yield from make_client(built[0], geonames_dir)
+def client(built: tuple[Path, dict], geonames_dir: Path, boundaries_dir: Path) -> Iterator[TestClient]:
+    yield from make_client(built[0], geonames_dir, boundaries_dir)
 
 
 @pytest.fixture(scope="module")
@@ -84,6 +86,12 @@ def test_places_search(client: TestClient):
     (p,) = r.json()
     assert p["name"] == "São Paulo" and p["label"]
     assert client.get("/places/search").json() == []
+
+
+def test_health_counts_boundaries(client: TestClient, built: tuple[Path, dict], geonames_dir: Path):
+    assert client.get("/health").json()["boundaries"] == len(BOUNDARY_POLYGONS)
+    for c in make_client(built[0], geonames_dir):
+        assert c.get("/health").json()["boundaries"] == 0
 
 
 def test_without_geonames(client_without_places: TestClient):

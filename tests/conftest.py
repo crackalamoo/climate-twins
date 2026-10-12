@@ -10,7 +10,9 @@ from pathlib import Path
 import netCDF4
 import numpy as np
 import pytest
+import shapefile
 
+from climate_twins.boundaries import BOUNDARIES_FILE
 from climate_twins.build import FILE_PATTERN, build
 from climate_twins.features import (
     CLEARNESS_BLEND_W_M2,
@@ -282,15 +284,25 @@ GEONAMES_ROWS = [
     # Across a sea from a big foreign city, around (15, 30): the villages there say ER.
     *((f"Coast {k}", f"Coast {k}", 15.0 + 0.05 * k, 30.0, "ER", "", 700, "PPL") for k in range(5)),
     ("Portcity", "Portcity", 15.0, 31.0, "SA", "10", 3_000_000, "PPL"),  # ~107 km E: labels it, foreign
+    # A sparsely mapped country (SS, north of lat 4 in BOUNDARY_POLYGONS) beside a densely mapped
+    # one (UG, south of it): the towns nearest (4.3, 32) are mostly across the border.
+    ("Northtown", "Northtown", 5.5, 32.0, "SS", "01", 400_000, "PPL"),
+    *((f"Border {k}", f"Border {k}", 3.9 - 0.05 * k, 32.0, "UG", "N", 800, "PPL") for k in range(8)),
+    # A region split after Natural Earth drew it: most of the old Almaty Region's towns are now in Zhetysu.
+    *((f"Almaty {k}", f"Almaty {k}", 44.1 + 0.1 * k, 78.0, "KZ", "10", 900, "PPL") for k in range(2)),
+    *((f"Zhetysu {k}", f"Zhetysu {k}", 44.6 + 0.1 * k, 78.0, "KZ", "17", 900, "PPL") for k in range(3)),
 ]
 GEONAMES_ADMIN1 = {
     "BR.27": "São Paulo", "BR.13": "Maranhão", "BR.23": "Rio Grande do Sul", "PT.17": "Porto",
     "CH.ZH": "Zurich", "US.MN": "Minnesota", "SA.10": "Riyadh Region",
     "RU.91": "Krasnoyarsk Krai", "LY.34": "Sabha District", "CN.10": "Hebei", "CN.14": "Tibet",
+    "SS.01": "Central Equatoria", "UG.N": "Northern Region",
+    "NO.21": "Trøndelag", "KZ.10": "Almaty Region", "KZ.17": "Zhetysu Region",
 }
 GEONAMES_COUNTRIES = {
     "BR": "Brazil", "PT": "Portugal", "CH": "Switzerland", "US": "United States", "SA": "Saudi Arabia", "TD": "Chad",
-    "RU": "Russia", "LY": "Libya", "CN": "China", "ER": "Eritrea",
+    "RU": "Russia", "LY": "Libya", "CN": "China", "ER": "Eritrea", "SS": "South Sudan", "UG": "Uganda",
+    "NO": "Norway", "KZ": "Kazakhstan",
 }
 
 
@@ -317,3 +329,42 @@ def write_geonames(directory: Path, rows=GEONAMES_ROWS) -> Path:
 @pytest.fixture(scope="session")
 def geonames_dir(tmp_path_factory) -> Path:
     return write_geonames(tmp_path_factory.mktemp("geonames"))
+
+
+def _box(lon0: float, lat0: float, lon1: float, lat1: float) -> list[tuple[float, float]]:
+    """A clockwise exterior ring of (lon, lat)."""
+    return [(lon0, lat0), (lon0, lat1), (lon1, lat1), (lon1, lat0), (lon0, lat0)]
+
+
+# Natural Earth admin-1 polygons: (iso_a2, gn_a1_code, name, name_en, exterior ring).
+BOUNDARY_POLYGONS = [
+    ("US", "US.MN", "Minnesota", "Minnesota", _box(-97, 43, -93, 47)),
+    ("LY", "LY.34", "Sabha", "Sabha", _box(12, 25, 15, 28)),
+    ("SA", "SA.10", "Ar Riyad", "Riyadh", _box(43, 23, 47, 27)),  # not GeoNames' name: code unchecked
+    ("CN", "CN.14", "Xizang", "Tibet", _box(86, 32, 88, 34)),
+    ("ER", "-1", "Gash Barka", "Gash Barka", _box(29.5, 14.5, 30.5, 15.5)),
+    # SS north of lat 4, UG south: the towns nearest (4.3, 32) are mostly across the border.
+    ("SS", "SS.01", "Central Equatoria", "Central Equatoria", _box(31, 4, 33, 6)),
+    ("UG", "-1", "Gulu", "Gulu", _box(31, 2, 33, 4)),
+    ("NO", "NO.21", "Svalbard", "Svalbard", _box(10, 78, 20, 80)),  # a stale code: NO.21 is now Trøndelag
+    ("KZ", "KZ.10", "Almaty", "Almaty", _box(77, 44, 79, 45)),
+]
+
+
+def write_boundaries(directory: Path, polygons=BOUNDARY_POLYGONS) -> Path:
+    """Write a tiny ne_10m_admin_1_states_provinces shapefile."""
+    directory.mkdir(parents=True, exist_ok=True)
+    with shapefile.Writer(directory / BOUNDARIES_FILE, shapeType=shapefile.POLYGON) as w:
+        w.field("iso_a2", "C", size=4)
+        w.field("gn_a1_code", "C", size=10)
+        w.field("name", "C", size=40)
+        w.field("name_en", "C", size=40)
+        for iso_a2, gn_a1_code, name, name_en, ring in polygons:
+            w.poly([ring])
+            w.record(iso_a2, gn_a1_code, name, name_en)
+    return directory
+
+
+@pytest.fixture(scope="session")
+def boundaries_dir(tmp_path_factory) -> Path:
+    return write_boundaries(tmp_path_factory.mktemp("naturalearth"))

@@ -26,11 +26,13 @@ from fastapi.staticfiles import StaticFiles
 
 from . import tiles
 from .index import DEFAULT_EXCLUDE_KM, MAX_SNAP_KM, Align, ClimateIndex, NoLandError
+from .boundaries import Boundaries
 from .places import Places
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATA = ROOT / "data" / "processed"
 DEFAULT_GEONAMES = ROOT / "data" / "geonames"
+DEFAULT_BOUNDARIES = ROOT / "data" / "naturalearth"
 TILE_CACHE_CONTROL = "public, max-age=86400"
 # The UI's ES modules import each other, so a browser mixing a fresh app.js with a stale
 # cached map.js fails to start. Revalidate every load; ETags keep unchanged files a cheap 304.
@@ -46,7 +48,8 @@ Lon = Annotated[float, Query(ge=-180, le=180)]
 async def lifespan(app: FastAPI):
     t0 = time.time()
     app.state.index = ClimateIndex.load(Path(os.environ.get("CLIMATE_TWINS_DATA", DEFAULT_DATA)))
-    app.state.places = Places.load(Path(os.environ.get("CLIMATE_TWINS_GEONAMES", DEFAULT_GEONAMES)))
+    boundaries = Boundaries.load(Path(os.environ.get("CLIMATE_TWINS_BOUNDARIES", DEFAULT_BOUNDARIES)))
+    app.state.places = Places.load(Path(os.environ.get("CLIMATE_TWINS_GEONAMES", DEFAULT_GEONAMES)), boundaries)
     app.state.load_seconds = round(time.time() - t0, 1)
     yield
 
@@ -77,6 +80,7 @@ def health(request: Request) -> dict:
         "built": index.meta.get("built"),
         "source": index.meta.get("source"),
         "places": len(request.app.state.places) if request.app.state.places is not None else 0,
+        "boundaries": len(places.boundaries) if (places := request.app.state.places) and places.boundaries else 0,
         "query_cache_entries": len(index.query_cache),
         "load_seconds": request.app.state.load_seconds,
     }
