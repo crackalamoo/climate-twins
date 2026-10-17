@@ -257,19 +257,17 @@ class ClimateIndex:
         q_phys = {k: v[0] for k, v in self.physical(qi).items()}
         matches = []
         for rank, i in enumerate(picked, 1):
-            # Exact distances: d2 uses the fast |x|^2 - 2x.q + |q|^2 expansion in float32,
-            # which is off by ~1e-5 and so reports ~0.003 for an identical climate.
-            per_variant = ((self.pcs[i].astype(np.float64) - qp) ** 2).sum(axis=1)
+            per_variant = self._exact_d2(q, [i])[0]
             shifted = bool(len(qp) > 1 and per_variant[1] < per_variant[0])
             matches.append(
                 {
                     "rank": rank,
                     "cell": self._cell_json(i),
                     "km_from_query": round(float(great_circle_km(lat, lon, self.lat_of(i), self.lon_of(i))), 0),
-                    "distance": round(float(np.sqrt(per_variant.min())), 4),
+                    "distance": round(float(np.sqrt(per_variant.min())), 4),  # = distance_at
                     "more_similar_than_pct_of_land": round(100.0 - float(q.top_pct(d2[i], exclude_km)), 3),
                     "seasons_shifted_6_months": shifted,
-                    "difference_share": self._difference_share(q.variants[int(shifted)], i),
+                    **self._difference(q.variants[int(shifted)], i),
                     **self._climate_json(i, detail),
                 }
             )
@@ -301,6 +299,39 @@ class ClimateIndex:
         for a in (variants, qp, qq, sample_d2, sample_km):
             a.flags.writeable = False
         return Query(qi, align, variants, qp, qq, sample_d2, sample_km)
+
+    def _exact_d2(self, q: Query, pos) -> np.ndarray:
+        """(len(pos), v) squared distances from the cells at pos to each of q's alignments, in
+        float64. d2_at uses the fast |x|^2 - 2x.q + |q|^2 expansion in float32, which is off by
+        ~1e-5 and so reports ~0.003 for an identical climate: fine for ranking, not for display."""
+        return ((self.pcs[pos].astype(np.float64)[:, None, :] - q.qp) ** 2).sum(axis=2)
+
+    def distance_at(self, q: Query, pos) -> np.ndarray:
+        """The `distance` /similar reports for each cell at pos: exact, the best of q's alignments."""
+        return np.sqrt(self._exact_d2(q, pos).min(axis=1))
+
+    def distances_to(self, lat: float, lon: float, align: Align, lats, lons) -> np.ndarray:
+        """Climate distance from the query (lat, lon, align) to each point (lats, lons), on the same
+        scale as matches' `distance`. Points snap to land as queries do; NaN where one can't."""
+        q = self.query(self.locate(lat, lon)[0], align)
+        lats, lons = np.asarray(lats, dtype=np.float64), np.asarray(lons, dtype=np.float64)
+        # The cell a point is in has the nearest centre, which locate() would snap it to (if within
+        # MAX_SNAP_KM: always, on a ~4 km grid). Only the rest (a coastal city whose cell is sea) need
+        # its slower search (~2 ms each).
+        pos = self.positions_at(lats, lons)
+        found = pos >= 0
+        far = great_circle_km(lats[found], lons[found], self.lat_of(pos[found]), self.lon_of(pos[found])) > MAX_SNAP_KM
+        pos[np.flatnonzero(found)[far]] = -1
+        for j in np.flatnonzero(pos < 0):
+            try:
+                pos[j] = self.locate(float(lats[j]), float(lons[j]))[0]
+            except NoLandError:
+                pass
+        out = np.full(len(pos), np.nan)
+        ok = pos >= 0
+        if ok.any():
+            out[ok] = self.distance_at(q, pos[ok])
+        return out
 
     def d2_at(self, q: Query, pos: np.ndarray) -> np.ndarray:
         """Squared climate distance from q to the cells at pos (the min over q's alignments)."""
@@ -363,12 +394,20 @@ class ClimateIndex:
                 return picked
             lo, k = hi, min(k * 8, total)
 
-    def _difference_share(self, qvec: np.ndarray, i: int) -> dict:
-        """Share of the (full, unprojected) squared distance contributed by each feature."""
+    def _difference(self, qvec: np.ndarray, i: int) -> dict:
+        """Each feature's part of the (full, unprojected) squared distance: as a share, and as is.
+
+        As is (difference_d2) is in the weighted, standardized units the search measures in, so the
+        UI can size a gap ("slightly sunnier") on the search's own scale. distance**2 isn't that
+        total: the PCA truncation drops much of a close match's small difference (20-85% is kept).
+        """
         diff = (self.vectors(i)[0] - qvec).reshape(len(FEATURES), -1)
         per = (diff.astype(np.float64) ** 2).sum(axis=1)
         total = per.sum() or 1.0
-        return {f: round(float(x / total), 3) for f, x in zip(FEATURES, per)}
+        return {
+            "difference_share": {f: round(float(x / total), 3) for f, x in zip(FEATURES, per)},
+            "difference_d2": {f: round(float(x), 4) for f, x in zip(FEATURES, per)},
+        }
 
     def _cell_json(self, i: int) -> dict:
         return {"index": int(i), "lat": round(float(self.lat_of(i)), 4), "lon": round(float(self.lon_of(i)), 4)}

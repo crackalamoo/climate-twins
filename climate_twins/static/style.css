@@ -166,7 +166,7 @@ button {
 #results li.selected { background: var(--selected); box-shadow: inset 3px 0 var(--rank-color); }
 #results .rank { font-weight: 700; color: var(--rank-color, var(--text)); font-variant-numeric: tabular-nums; }
 #results .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#results .pct { font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; }
+#results .flags { font-size: 12px; white-space: nowrap; }
 #results .meta { grid-column: 2 / -1; font-size: 12px; color: var(--muted); }
 #results .shift { color: var(--text); cursor: help; }
 
@@ -177,6 +177,9 @@ button {
 #compare h3 { font-size: 15px; margin: 0 0 4px; }
 #compare h4 { font-size: 12px; margin: 12px 0 2px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
 #compare .note { font-size: 12px; color: var(--muted); margin: 2px 0; }
+#compare .verdict { font-size: 13px; margin: 6px 0 4px; }
+.nowrap { white-space: nowrap; }
+.tip { cursor: help; text-decoration: underline dotted; text-underline-offset: 2px; }
 #compare figure { margin: 0; }
 #compare svg { overflow: visible; }
 

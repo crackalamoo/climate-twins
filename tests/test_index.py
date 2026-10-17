@@ -1,6 +1,7 @@
 import itertools
 import threading
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -222,6 +223,50 @@ def test_difference_share(world: World):
     share = world.index().similar(*QUERY, n=1)["matches"][0]
     assert share["cell"]["lat"] == FAR[0]
     assert share["difference_share"]["ppt"] == pytest.approx(1.0)
+
+
+def test_difference_d2_is_the_unprojected_squared_distance(world: World):
+    idx = world.index()
+    res = idx.similar(*QUERY, n=5)
+    qi, _ = idx.locate(*QUERY)
+    q = idx.query(qi)
+    for m in res["matches"]:
+        d2 = m["difference_d2"]
+        assert list(d2) == list(FEATURES)
+        full = float(((idx.vectors(m["cell"]["index"])[0] - q.variants[int(m["seasons_shifted_6_months"])]) ** 2).sum())
+        assert sum(d2.values()) == pytest.approx(full, rel=1e-3, abs=1e-3)
+        total = sum(d2.values())
+        for f in FEATURES:
+            assert m["difference_share"][f] == pytest.approx(d2[f] / total, abs=2e-3)
+        # The projected distance leaves out the PCA's truncated part: never more than the full one.
+        assert m["distance"] ** 2 <= full * (1 + 1e-3) + 1e-6
+
+
+def test_distance_at_is_the_reported_distance(base_index: ClimateIndex):
+    for align in ("auto", "calendar"):
+        res = base_index.similar(*QUERY, n=10, align=align)
+        q = base_index.query(base_index.locate(*QUERY)[0], align)
+        got = base_index.distance_at(q, match_cells(res))
+        np.testing.assert_allclose(got, [m["distance"] for m in res["matches"]], atol=1e-4)
+
+
+def test_distances_to_snaps_points_like_queries(fine_index: ClimateIndex, monkeypatch):
+    """Points in a land cell take it, a point just offshore snaps to the coast, one far at sea is NaN;
+    each distance is the best of the query's alignments, as matches' are."""
+    rng = np.random.default_rng(0)
+    pcs = rng.normal(size=fine_index.pcs.shape).astype(np.float32)
+    idx = ClimateIndex(fine_index.grid, fine_index.codecs, fine_index.model, fine_index.cells, fine_index.raw, pcs, fine_index.sample)
+    q = SimpleNamespace(qp=rng.normal(size=(2, idx.model.k)).astype(np.float32))  # two alignments
+    monkeypatch.setattr(idx, "query", lambda qi, align="auto": q)
+    lats = idx.lat_of(np.arange(len(idx)))
+    north, north_lon = float(lats.max()), float(idx.lon_of(np.argmax(lats)))
+    inside = (float(lats[5]) + 0.01, float(idx.lon_of(5)) - 0.01)
+    points = [inside, (north + 0.15, north_lon), (0.0, 0.0)]
+    got = idx.distances_to(*inside, "auto", *zip(*points))
+    assert np.isnan(got[2])
+    for p, d in zip(points[:2], got[:2]):
+        i, _ = idx.locate(*p)
+        assert d == pytest.approx(np.sqrt(((pcs[i].astype(np.float64) - q.qp) ** 2).sum(axis=1).min()))
 
 
 def test_describe_decodes_raw(base_index: ClimateIndex):

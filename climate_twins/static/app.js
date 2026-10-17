@@ -75,12 +75,39 @@ function shortPlaceName(place) {
   return admin1 ?? country ?? null;
 }
 
-/** more_similar_than_pct_of_land (e.g. 99.994) -> "top 0.006%". */
-function fmtTop(pct) {
-  const top = 100 - pct;
-  if (top < 0.001) return "top <0.001%";
-  if (top >= 1) return `top ${+top.toFixed(1)}%`;
-  return `top ${+top.toPrecision(1)}%`;
+/** "Portland" -> "Portland's", "Brussels" -> "Brussels'". */
+const possessive = (name) => (/s$/i.test(name) ? `${name}'` : `${name}'s`);
+
+/** The query's own name, for "Portland's climate", only when it's in or near a city ("97 km NW of
+ * Cairns" isn't Cairns); else null, and callers say "your spot". */
+function queryName(place) {
+  return place?.tier === "exact" || place?.tier === "near" ? place.name : null;
+}
+
+/**
+ * How a match compares with well-known cities near the query (the server's `ruler_comparison`, a
+ * city in the response's `ruler`), as {text, title}: "Closer to Portland's climate than Seattle
+ * is", with the numbers behind it in `title`. Null when there's nothing to compare with.
+ */
+function rulerLine(match, ruler, queryPlace) {
+  const cmp = match.ruler_comparison;
+  if (!cmp) return null;
+  const name = queryName(queryPlace);
+  const climate = name ? `${possessive(name)} climate` : "your spot's climate";
+  const big = `Big cities: ${ruler.min_population.toLocaleString("en-US")}+ people, ${fmtDistance(ruler.min_km, { step: 10 })}–${fmtDistance(ruler.max_km, { step: 100 })} away.`;
+  const own = `Climate difference ${match.distance.toFixed(2)} (0 = identical).`;
+  if (cmp.kind === "all") {
+    const closest = ruler.cities[0]; // sorted most similar first
+    return {
+      text: `Closer to ${climate} than any big city within ${fmtDistance(ruler.max_km, { step: 100 })}`,
+      title: `${own} The most similar big city, ${closest.label}, is ${closest.distance.toFixed(2)}. ${big}`,
+    };
+  }
+  const { label, distance } = ruler.cities[cmp.city];
+  return {
+    text: cmp.kind === "closer" ? `Closer to ${climate} than ${label} is` : `About as close to ${climate} as ${label} is`,
+    title: `${own} ${label} is ${distance.toFixed(2)}. ${big}`,
+  };
 }
 
 /** A slider's km value (the input's string), to the nearest 10 mi in US units. */
@@ -209,11 +236,15 @@ function render(data) {
     const shift = m.seasons_shifted_6_months
       ? ` <span class="shift" title="Seasons shifted 6 months: its climate matches the query's six months later (e.g. the other hemisphere)">⇄</span>`
       : "";
+    // The raw climate difference stays in a tooltip: on the comparison line, else on "away".
+    const ruler = rulerLine(m, data.ruler, q.place);
+    const difference = `Climate difference ${m.distance.toFixed(2)} (0 = identical): the gap between their standardized monthly features.`;
     li.innerHTML = `
       <span class="rank">${m.rank}</span>
       <span class="label" title="${escapeHtml(placeLabel(m.place, m.cell))}">${escapeHtml(placeLabel(m.place, m.cell))}</span>
-      <span class="pct" title="More similar than ${m.more_similar_than_pct_of_land}% of land beyond the exclusion radius">${fmtTop(m.more_similar_than_pct_of_land)}${shift}</span>
-      <span class="meta">${fmtDistance(m.km_from_query)} away · <span title="How different the two climates are (0 = identical): the gap between their standardized monthly features">climate difference ${m.distance.toFixed(2)}</span></span>`;
+      <span class="flags">${shift}</span>
+      <span class="meta"${ruler ? "" : ` title="${escapeHtml(difference)}"`}>${fmtDistance(m.km_from_query)} away</span>
+      ${ruler ? `<span class="meta ruler" title="${escapeHtml(ruler.title)}">${escapeHtml(ruler.text)}</span>` : ""}`;
     // Mouse only: a tap would leave the row and its pin highlighted, with no "leave" to clear them.
     li.addEventListener("pointerenter", (e) => e.pointerType === "mouse" && hover(m.rank));
     li.addEventListener("pointerleave", (e) => e.pointerType === "mouse" && hover(null));
@@ -235,6 +266,7 @@ function showComparison(match) {
     match: placeLabel(match.place, match.cell),
     queryName: shortPlaceName(current.query.place),
     matchName: shortPlaceName(match.place),
+    verdictName: queryName(current.query.place) ?? "your spot", // as the results' comparison lines name it
   };
   ui.compare.hidden = false; // before rendering: the charts take the panel's width
   renderComparison(ui.compare, current.query, match, labels);

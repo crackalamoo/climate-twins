@@ -451,6 +451,20 @@ class Places:
         score = self.population[idx] / (km + CITY_DISTANCE_OFFSET_KM) ** CITY_DISTANCE_POWER
         return int(idx[np.argmax(score)])
 
+    def big_cities(self, lat: float, lon: float, min_km: float, max_km: float, min_population: int,
+                   metro_km: float) -> tuple[np.ndarray, np.ndarray]:
+        """Label-eligible cities of min_population+ between min_km and max_km of (lat, lon), and their
+        distances; but not one within metro_km of a more populous such city, as part of its metro
+        area (GeoNames lists New York's boroughs as cities: the Bronx folds into New York)."""
+        idx, km = self._within(lat, lon, max_km)
+        keep = (self.population[idx] >= min_population) & (km >= min_km)
+        idx, km = idx[keep], km[keep]
+        part = np.zeros(idx.size, dtype=bool)
+        for j, i in enumerate(idx):  # a handful of cities: one neighbourhood lookup each
+            near, _ = self._within(self.lat[i], self.lon[i], metro_km)
+            part[j] = bool(np.any(self.population[near] > self.population[i]))
+        return idx[~part], km[~part]
+
     def _polygon_areas(self) -> list[tuple[str, str] | None]:
         """Each boundary polygon's (country code, GeoNames admin1 region or ""), or None if its
         country is unknown. Only names two sources agree on, never a majority:

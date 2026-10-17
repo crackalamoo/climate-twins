@@ -32,10 +32,54 @@ Each match has:
   `exclude_km` that is less similar.
 - `seasons_shifted_6_months`.
 - `difference_share`: which features make up the difference: each one's share of the
-  squared difference over all features (`distance` is the same, up to the PCA truncation).
+  squared difference over all features.
+- `difference_d2`: each feature's part of that squared difference as is, in the same weighted,
+  standardized units as `distance`, so the UI can size a gap on the search's own scale. They sum
+  to the full, unprojected squared distance; `distance`² is smaller, as the PCA truncation drops
+  a sizable part (15–80% among top matches) of a close match's small difference.
 - `summary`: annual and extreme values.
 - `place`: a **Place label** (below), or `null`. The query's `place` is for the
   requested `lat/lon`; a match's is for its cell centre.
+
+The response also has a `ruler`: well-known cities near the query, scored like the matches, and
+each match has a `ruler_comparison` against them, so the UI can say a match is "closer to
+Portland's climate than Seattle is".
+
+```json
+"ruler": {
+  "min_km": 50, "max_km": 500, "min_population": 500000,
+  "cities": [
+    {"name": "Tacoma", "label": "Tacoma", "population": 222906, "lat": 47.2529, "lon": -122.4443,
+     "km_from_query": 194, "distance": 0.193},
+    {"name": "Vancouver", "label": "Vancouver, Canada", "population": 662248, "lat": 49.2497,
+     "lon": -123.1193, "km_from_query": 416, "distance": 0.6995}
+  ]
+}
+```
+
+- Candidates are major cities (`min_population`+ people, `RULER_MIN_POPULATION`; not a section of
+  another place) between `min_km` and `max_km` of the requested `lat/lon` (`RULER_MIN_KM`, and the
+  labels' `CITY_KM`, in `server.py`). Nearer than `min_km` is the query's own metro area: Vancouver,
+  WA is 15 km from Portland, and "closer than Vancouver" would say nothing. A city within `min_km`
+  of a more populous one is part of its metro area, and is left out (the Bronx, for New York).
+  With every 100k+ city, nearly every match would be "about as close as" some suburb.
+- `distance` is the same measure as matches' `distance`, from the query (with its `align`) to the
+  land cell the city is in, or the nearest one within 25 km as for queries. A city with no land
+  cell within reach (a tiny island) is skipped.
+- `label` is the city's name, plus its country when that differs from the query point's
+  (`"Vancouver, Canada"` from Portland, so it doesn't read as Vancouver, WA).
+- Sorted most similar first. Every candidate is scored (a few ms even near Brussels, ~200 of them),
+  but only the cities some match's comparison names are listed, plus the most similar one.
+- `cities` is `[]` without place names, or when no city qualifies (the outback, the central Sahara).
+
+A match's `ruler_comparison` (`ruler()` in `server.py`; "about as close" means within `RULER_BAND`,
+±10%, of a city's distance):
+- `{"kind": "all"}`: closer than every ruler city by more than that;
+- `{"kind": "about", "city": 2}`: about as close as a city (`city` indexes `ruler.cities`); of
+  several, the one nearest in distance;
+- `{"kind": "closer", "city": 0}`: otherwise, closer than a city by more than the band; of
+  several, the most similar one it beats (the strongest claim);
+- `null`: no ruler cities, or less similar than all of them.
 
 `GET /climate?lat&lon`: as before, plus a `place` field (for the requested `lat/lon`).
 
@@ -260,12 +304,28 @@ legend from this endpoint.
     the shorter way round the world, between one world across and zoom 5. Moving
     a slider refits only if a new pin is out of view; selecting or hovering a
     match, the season-shift checkbox and the units toggle don't refit;
-  - a results list (place label, km away, `distance` shown as "climate difference",
-    percentile, ⇄ when seasons are shifted);
+  - a results list: place label, distance away, ⇄ when seasons are shifted, and how the match
+    compares with the `ruler` (its `ruler_comparison`, above), with the raw `distance` in a
+    tooltip: "Closer to Portland's climate than any big city within 300 mi" (`max_km`, rounded to
+    100 in the display unit), "About as close to Portland's climate as Salem is", "Closer to
+    Portland's climate than Seattle is", or no line.
+    The query is named only when it's in or near a city (`exact`/`near` tier), else "your spot's climate";
   - clicking a result flies the map to it and shows a comparison panel. The panel
-    has 12-month charts (temperature band tmin–tmax plus precipitation bars, query
-    vs match, with seasons aligned when shifted) built with Observable Plot (CDN),
-    and a bar for `difference_share`.
+    starts with a one-line verdict (`verdict()` in `static/verdict.js`), shown as "Compared to
+    Portland: drier summers, much wetter winters. Sunnier." (the query named as in the results'
+    comparison lines, else "your spot"): every factor with a clear pattern, largest first, each described by
+    the pattern explaining most of its monthly gap (an overall shift, bigger or smaller seasons, days
+    vs nights, summer coming later), with size words ("slightly", none, "much") from
+    `difference_d2`, i.e. the search's own scale. Summer comes before winter and days before nights.
+    Wind is mentioned only when the difference is big or the only one, humidity only for summer
+    (or overall). A near-twin (every difference slight) is "Very similar." plus its largest
+    difference; differences with no simple pattern get no verdict. "Summer" is each place's own:
+    months are compared with the match's seasons aligned, as in the charts. Then 12-month charts (temperature band
+    tmin–tmax plus precipitation bars, query vs match, with seasons aligned when shifted) built
+    with Observable Plot (CDN), a summary table, and a bar for `difference_share`;
+  - the summary stats show the muggiest month's average dewpoint as how it feels (comfortable
+    below 60 °F, humid to 65 °F, muggy to 70 °F, oppressive above: our own bands for monthly
+    averages, see `DEWPOINT_COMFORT` in `charts.js`), with the number beside it.
 - State lives only in the URL (`?lat&lon&exclude&suppress&align`). No
   localStorage.
 - Units: a sidebar toggle switches the display between metric (°C, mm, km) and US

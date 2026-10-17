@@ -1,16 +1,22 @@
 import io
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from climate_twins.boundaries import Boundaries
 from climate_twins.features import VARIANCE_TARGET
 from climate_twins.index import MONTHLY_VARS
+from climate_twins.places import Places
+import climate_twins.server as server
+from climate_twins.geo import great_circle_km
 from climate_twins.server import app
 
-from .conftest import BOUNDARY_POLYGONS, NC_QUERY, NC_TWIN
+from .conftest import BOUNDARY_POLYGONS, NC_QUERY, NC_TWIN, write_geonames
 
 
 def make_client(data: Path, geonames: Path, boundaries: Path | None = None) -> Iterator[TestClient]:
@@ -127,3 +133,99 @@ def test_static_files_revalidate(client: TestClient, path: str):
     assert r.status_code == 200
     assert r.headers["cache-control"] == "no-cache"
     assert client.get(path, headers={"If-None-Match": r.headers["etag"]}).status_code == 304
+
+
+def test_similar_has_a_ruler(client: TestClient):
+    body = client.get("/similar", params={"lat": NC_QUERY[0], "lon": NC_QUERY[1], "n": 1}).json()
+    assert set(body["ruler"]) == {"min_km", "max_km", "min_population", "cities"}
+    assert "ruler_comparison" in body["matches"][0]
+    assert (body["ruler"]["min_km"], body["ruler"]["max_km"], body["ruler"]["min_population"]) == (50, 500, 500_000)
+
+
+# The ruler on the 2-degree synthetic world (base_index), whose cell centres sit on odd degrees:
+# cities around RULER_QUERY (in "North America", and in Minnesota's boundary polygon), most on cell
+# centres so they snap. (name, lat, lon, country, population). The big ones 50-500 km away are
+# candidates; too near, too far, too small, part of a bigger city's metro and unsnappable ones aren't.
+RULER_QUERY = (45.0, -95.0)
+RULER_ROWS = [
+    ("Suburbia", 45.0, -95.3, "US", 1_000_000),  # ~24 km: the query's own metro area
+    ("Bigcity", 45.0, -97.0, "US", 2_000_000),  # ~157 km
+    ("Borough", 45.0, -96.8, "US", 1_200_000),  # ~16 km from Bigcity, which is bigger: part of it
+    ("Eastville", 45.0, -91.0, "US", 800_000),  # ~315 km
+    ("Grenzstadt", 47.0, -99.0, "CH", 600_000),  # ~370 km, across a border
+    ("Lakeside", 49.0, -95.0, "US", 550_000),  # ~445 km
+    ("Westport", 45.0, -101.0, "US", 500_000),  # ~472 km
+    ("Offcentre", 44.0, -98.0, "US", 700_000),  # ~250 km, but on a cell corner: >25 km from any centre
+    ("Hamlet", 43.0, -95.0, "US", 400_000),  # too small
+    ("Faraway", 45.0, -103.0, "US", 900_000),  # ~629 km: too far
+]
+
+
+@pytest.fixture(scope="module")
+def ruler_request(base_index, tmp_path_factory, boundaries_dir: Path) -> SimpleNamespace:
+    """A stand-in for the Request ruler() reads: the synthetic world and the cities above."""
+    rows = [(n, n, lat, lon, cc, "MN" if cc == "US" else "", pop, "PPL") for n, lat, lon, cc, pop in RULER_ROWS]
+    places = Places.load(write_geonames(tmp_path_factory.mktemp("ruler-geonames"), rows), Boundaries.load(boundaries_dir))
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(index=base_index, places=places)))
+
+
+def candidate_distances(ruler_request: SimpleNamespace, align: str = "auto") -> dict[str, float]:
+    """The candidates' distances from RULER_QUERY, straight from the index (the expected values)."""
+    index = ruler_request.app.state.index
+    q = index.query(index.locate(*RULER_QUERY)[0], align)
+    names = ("Bigcity", "Eastville", "Grenzstadt", "Lakeside", "Westport")
+    rows = {n: next(r for r in RULER_ROWS if r[0] == n) for n in names}
+    return {n: float(index.distance_at(q, [index.locate(lat, lon)[0]])[0]) for n, (_, lat, lon, _, _) in rows.items()}
+
+
+def test_ruler(ruler_request: SimpleNamespace):
+    lat, lon = RULER_QUERY
+    expected = candidate_distances(ruler_request)
+    # A match exactly as close as each candidate ties with it, so every candidate is listed.
+    ruler, comparisons = server.ruler(ruler_request, lat, lon, "auto", list(expected.values()))
+    cities = {c["name"]: c for c in ruler["cities"]}
+    assert set(cities) == set(expected)
+    assert [c["distance"] for c in ruler["cities"]] == sorted(c["distance"] for c in ruler["cities"])
+    assert cities["Bigcity"]["label"] == "Bigcity"
+    assert cities["Grenzstadt"]["label"] == "Grenzstadt, Switzerland"  # the query is in the US
+    assert cities["Westport"]["km_from_query"] == round(great_circle_km(lat, lon, 45.0, -101.0))
+    assert cities["Westport"]["population"] == 500_000
+    for name, comparison in zip(expected, comparisons):
+        assert comparison == {"kind": "about", "city": list(cities).index(name)}
+    # The same measure as matches' `distance`, from the query to the city's land cell, in either alignment.
+    for align in ("auto", "calendar"):
+        want = candidate_distances(ruler_request, align)
+        got, _ = server.ruler(ruler_request, lat, lon, align, list(want.values()))
+        for c in got["cities"]:
+            assert c["distance"] == pytest.approx(want[c["name"]], abs=1e-4)
+
+
+def test_ruler_candidates(ruler_request: SimpleNamespace):
+    places = ruler_request.app.state.places
+    idx, _ = places.big_cities(*RULER_QUERY, server.RULER_MIN_KM, server.CITY_KM, server.RULER_MIN_POPULATION, server.RULER_MIN_KM)
+    # Not Suburbia (the query's metro), Borough (Bigcity's), Hamlet (too small) or Faraway (too far).
+    assert {places.name[i] for i in idx} == {"Bigcity", "Eastville", "Grenzstadt", "Lakeside", "Westport", "Offcentre"}
+
+
+def test_ruler_comparisons(ruler_request: SimpleNamespace):
+    """A tie if any (the nearest in distance), else "closer than" the most similar city it clearly
+    beats; "all" when it clearly beats every one; None when it beats none. Only the cities named,
+    and the most similar one, are listed."""
+    dist = candidate_distances(ruler_request)
+    band = server.RULER_BAND
+    best, worst = min(dist.values()), max(dist.values())
+    tie = lambda d: [n for n, c in dist.items() if abs(d - c) <= band * c]
+    # A distance that ties with no candidate but clearly beats some: "closer than" the most similar of those.
+    gap = next(d for d in np.linspace(best, worst, 4000) if not tie(d) and any(d < c * (1 - band) for c in dist.values()))
+    beaten = min((c, n) for n, c in dist.items() if gap < c * (1 - band))[1]
+    ruler, comparisons = server.ruler(ruler_request, *RULER_QUERY, "auto", [best * 0.5, gap, worst * 10])
+    names = [c["name"] for c in ruler["cities"]]
+    assert comparisons[0] == {"kind": "all"}
+    assert comparisons[1] == {"kind": "closer", "city": names.index(beaten)}
+    assert comparisons[2] is None
+    assert set(names) == {beaten, min(dist, key=dist.get)}
+
+
+def test_ruler_without_places(client_without_places: TestClient):
+    body = client_without_places.get("/similar", params={"lat": NC_QUERY[0], "lon": NC_QUERY[1], "n": 1}).json()
+    assert body["ruler"]["cities"] == []
