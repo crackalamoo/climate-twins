@@ -127,7 +127,8 @@ def places_search(
     q: Annotated[str, Query(max_length=100)] = "",
     limit: Annotated[int, Query(ge=1, le=50)] = 8,
 ) -> list[dict]:
-    """Autocomplete: places whose name starts with q, most populous first."""
+    """Autocomplete: places whose name starts with q, optionally followed by their region and/or
+    country ("Portland, Oregon"); whole names first, then the most populous."""
     places: Places | None = request.app.state.places
     return places.search(q, limit) if places is not None else []
 

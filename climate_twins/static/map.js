@@ -70,6 +70,11 @@ const MERGE_PX = 26;
 const FOCUS_MS = 500;
 const FAR_SCREENS = 2;
 const FAR_MS = 1000; // a fixed length: flyTo's speed-based ones run 2 s+ on a phone
+// Showing a new query with its matches: an ease of the same fixed length, no closer than the data's
+// native resolution (~4.6 km cells), and no farther out than one world across (beyond that the map
+// only repeats it).
+const FIT_MS = 1000;
+const FIT_MAX_ZOOM = 5;
 
 /** Web Mercator position in [0, 1] world units. */
 function mercator(lon, lat) {
@@ -81,6 +86,19 @@ function mercator(lon, lat) {
 function pixelDistance(a, b, zoom) {
   const dx = Math.abs(a.xy[0] - b.xy[0]);
   return Math.hypot(Math.min(dx, 1 - dx), a.xy[1] - b.xy[1]) * 512 * 2 ** zoom;
+}
+
+/**
+ * [west, east] of the narrowest span of longitude holding all `lons`: everything but the widest gap
+ * between neighbours, which may be the one across the antimeridian or not (then east > 180).
+ */
+function lonSpan(lons) {
+  const s = [...lons].sort((a, b) => a - b);
+  let [west, east, gap] = [s[0], s.at(-1), s[0] + 360 - s.at(-1)];
+  for (let i = 1; i < s.length; i++) {
+    if (s[i] - s[i - 1] > gap) [west, east, gap] = [s[i], s[i - 1] + 360, s[i] - s[i - 1]];
+  }
+  return [west, east];
 }
 
 /**
@@ -162,7 +180,8 @@ function matchLayers() {
 }
 
 export class ClimateMap {
-  constructor(container, { onClick, onMarkerClick, onMarkerHover }) {
+  /** `overlays`: elements of the page laid over the map (the legend), which fitResults keeps pins clear of. */
+  constructor(container, { onClick, onMarkerClick, onMarkerHover, overlays = [] }) {
     this.map = new Map({ container, style: STYLE, center: [0, 20], zoom: 1.3, attributionControl: { compact: true } });
     this.map.addControl(new NavigationControl({ showCompass: false }), "top-left");
     this.map.getCanvas().style.cursor = "crosshair";
@@ -174,7 +193,9 @@ export class ClimateMap {
     this.onMarkerClick = onMarkerClick;
     this.onMarkerHover = onMarkerHover;
     this.queryMarker = null;
-    this.marks = { hover: null, selected: null }; // rank highlighted by markMatch
+    this.queryPoint = null; // {lat, lon} of the star
+    this.overlays = overlays;
+    this.marks ={ hover: null, selected: null }; // rank highlighted by markMatch
     this.hoverKey = null; // pin under the mouse
     this.tip = new Popup({ closeButton: false, closeOnClick: false, offset: 16, className: "merged-tip" });
   }
@@ -206,6 +227,7 @@ export class ClimateMap {
     el.textContent = "★";
     el.title = "Query";
     this.queryMarker = new Marker({ element: el }).setLngLat([lon, lat]).addTo(this.map);
+    this.queryPoint = { lat, lon };
   }
 
   /** Show the matches as numbered pins, merged into the best-ranked one where they would overlap. */
@@ -302,11 +324,59 @@ export class ClimateMap {
     else this.map.easeTo({ ...camera, duration: FOCUS_MS });
   }
 
-  /** Whether a point is on screen, at least a pin's width in from the edges. */
-  inView({ lon, lat }) {
-    const { x, y } = this.map.project([lon, lat]);
+  /**
+   * Whether a point is on screen, `pad` px in from the edges (a pin's width by default), in the
+   * copy of the world nearest the centre: the one pins and the star draw in.
+   */
+  inView({ lon, lat }, pad = { top: MERGE_PX, bottom: MERGE_PX, left: MERGE_PX, right: MERGE_PX }) {
+    const centre = this.map.getCenter().lng;
+    const { x, y } = this.map.project([lon + 360 * Math.round((centre - lon) / 360), lat]);
     const { clientWidth: w, clientHeight: h } = this.map.getContainer();
-    return x >= MERGE_PX && x <= w - MERGE_PX && y >= MERGE_PX && y <= h - MERGE_PX;
+    return x >= pad.left && x <= w - pad.right && y >= pad.top && y <= h - pad.bottom;
+  }
+
+  /**
+   * Padding (px) that keeps pins a pin's width clear of the map's edges and of whatever sits over it:
+   * the zoom buttons, the attribution and `overlays` (the legend). Each overlay is in a corner, so it
+   * pads the top or bottom by as far as it reaches in.
+   */
+  fitPadding() {
+    const box = this.map.getContainer().getBoundingClientRect();
+    const pad = { top: 0, bottom: 0, left: 0, right: 0 };
+    for (const el of [...this.map.getContainer().querySelectorAll(".maplibregl-ctrl"), ...this.overlays]) {
+      const r = el.getBoundingClientRect();
+      if (!r.width || r.bottom <= box.top || r.top >= box.bottom || r.right <= box.left || r.left >= box.right) continue;
+      if (r.top + r.bottom < box.top + box.bottom) pad.top = Math.max(pad.top, r.bottom - box.top);
+      else pad.bottom = Math.max(pad.bottom, box.bottom - r.top);
+    }
+    // On a short map, never pad away more than half its height.
+    const squeeze = Math.min(1, (box.height / 2) / (pad.top + pad.bottom || 1));
+    return {
+      top: pad.top * squeeze + MERGE_PX,
+      bottom: pad.bottom * squeeze + MERGE_PX,
+      left: MERGE_PX,
+      right: MERGE_PX,
+    };
+  }
+
+  /**
+   * Show the query's star and all its matches: ease to the closest view that holds them clear of the
+   * overlays (fitPadding), going the shorter way round the world (lonSpan), between one world across
+   * and FIT_MAX_ZOOM. With `ifHidden`, only if one of them is out of that view now.
+   */
+  async fitResults({ ifHidden = false } = {}) {
+    await this.loaded;
+    const points = [...(this.points ?? []), ...(this.queryPoint ? [this.queryPoint] : [])];
+    if (!points.length) return;
+    const padding = this.fitPadding();
+    if (ifHidden && points.every((p) => this.inView(p, padding))) return;
+    const [west, east] = lonSpan(points.map((p) => p.lon));
+    const lats = points.map((p) => p.lat);
+    const camera = this.map.cameraForBounds([[west, Math.min(...lats)], [east, Math.max(...lats)]], { padding });
+    if (!camera) return; // the padding leaves no room
+    const oneWorld = Math.log2(this.map.getContainer().clientWidth / 512); // 512 px: the world's width at zoom 0
+    const zoom = Math.min(Math.max(camera.zoom, oneWorld, this.map.getMinZoom()), FIT_MAX_ZOOM);
+    this.map.easeTo({ center: camera.center, zoom, duration: FIT_MS, essential: true });
   }
 
   handleHover(e) {
@@ -333,14 +403,6 @@ export class ClimateMap {
 
   hideTip() {
     this.tip.remove();
-  }
-
-  flyTo(lat, lon, zoom) {
-    this.map.flyTo({ center: [lon, lat], zoom: zoom ?? Math.max(this.map.getZoom(), 4), essential: true });
-  }
-
-  jumpTo(lat, lon, zoom) {
-    this.map.jumpTo({ center: [lon, lat], zoom });
   }
 }
 

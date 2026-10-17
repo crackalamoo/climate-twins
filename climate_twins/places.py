@@ -4,6 +4,8 @@ Reads three files from https://download.geonames.org/export/dump/ (see README):
 cities500.txt, admin1CodesASCII.txt and countryInfo.txt. Parsed once into a compact
 places.npz cache next to them, which is rebuilt whenever a source file is newer.
 Where a point is (its country and region) comes from boundary polygons (boundaries.py).
+Search matches a place's name, optionally followed by its region and/or country
+("Portland, Oregon", "Paris France", "Portland OR, USA"), as GeoNames names and codes them.
 """
 
 import bisect
@@ -12,6 +14,8 @@ import logging
 import os
 import tempfile
 import unicodedata
+from collections import Counter
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import numpy as np
@@ -26,7 +30,7 @@ CITIES_FILE = "cities500.txt"
 ADMIN1_FILE = "admin1CodesASCII.txt"
 COUNTRY_FILE = "countryInfo.txt"
 CACHE_FILE = "places.npz"
-CACHE_VERSION = 6
+CACHE_VERSION = 7
 
 # Labels only name places people have heard of, and population is the best fame signal
 # in GeoNames: a city of CITY_MIN_POPULATION+ within CITY_KM, trading size against
@@ -36,6 +40,8 @@ CITY_KM = 500.0
 CITY_DISTANCE_OFFSET_KM = 15.0
 CITY_DISTANCE_POWER = 3
 NEAR_KM = 25.0  # closer than this to the city, the label is "near <city>"
+# Search also finds cities that can label (CITY_MIN_POPULATION+) by all their GeoNames alternate
+# names: other languages, former names, abbreviations ("NYC") and airport codes ("PDX").
 SPELLING_SIMILARITY = 0.75  # an alternate name this close to the name is another spelling of it
 # Naming boundary polygons (Places._polygon_areas): the towns inside one name its country, or
 # a region it has no usable code for, only if there are at least this many and every one agrees.
@@ -85,15 +91,19 @@ _UNDECOMPOSED = str.maketrans({"ı": "i", "ł": "l", "Ł": "l", "ø": "o", "Ø":
 
 
 def normalize(text: str) -> str:
-    """Case- and accent-insensitive search key: NFKD, drop combining marks, casefold."""
-    decomposed = unicodedata.normalize("NFKD", text.translate(_UNDECOMPOSED))
-    return "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
+    """Case- and accent-insensitive search key: casefold, NFKD, drop combining marks. Idempotent."""
+    decomposed = unicodedata.normalize("NFKD", text.casefold().translate(_UNDECOMPOSED))
+    return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
+def _plain_words(text: str) -> list[str]:
+    """normalize()d words of a name, punctuation dropped: "Arkhangel'sk" -> ["arkhangelsk"]."""
+    return "".join(c if c.isalnum() or c.isspace() else (" " if c in "-/,()" else "") for c in normalize(text)).split()
 
 
 def _name_words(text: str) -> list[str]:
-    """normalize()d words of a name, punctuation dropped: "Arkhangel'sk" -> ["arkhangelsk"]."""
-    kept = "".join(c if c.isalnum() or c.isspace() else (" " if c in "-/,()" else "") for c in normalize(text))
-    return ["saint" if w == "st" else w for w in kept.split()]
+    """_plain_words, with "St" as "Saint"."""
+    return ["saint" if w == "st" else w for w in _plain_words(text)]
 
 
 def region_repeats_city(region: str, name: str, *spellings: str) -> bool:
@@ -131,6 +141,82 @@ def _region_key(name: str) -> str:
     return " ".join(w for w in _name_words(name.split("(")[0]) if w not in _ADMIN_WORDS)
 
 
+def _words(text: str) -> str:
+    """A name as space-separated normalize()d words, for comparing search qualifiers. Not "St" as
+    "Saint", since a qualifier's last word may be unfinished ("United St")."""
+    return " ".join(_plain_words(text))
+
+
+def _prefixed(keys: list[str], prefix: str) -> slice:
+    """The range of sorted keys that start with prefix."""
+    lo = bisect.bisect_left(keys, prefix)
+    return slice(lo, bisect.bisect_left(keys, prefix + "\U0010ffff", lo))
+
+
+def _readings(text: str) -> Iterator[tuple[str, list[str]]]:
+    """Ways to read a normalize()d search as a name and then qualifier words, split at a space or
+    comma: "portland oregon" is the name "portland oregon", or "portland" then ["oregon"]."""
+    yield text.rstrip(" ,"), []
+    for i in range(1, len(text)):
+        if text[i - 1] in " ," and text[i] not in " ,":
+            name, words = text[:i].rstrip(" ,"), _plain_words(text[i:])
+            if len(name) >= 2 and words:
+                yield name, words
+
+
+class _Qualifiers:
+    """What can follow a place's name in a search: its region (admin1), its country, or both.
+    A region by its GeoNames name or admin1 code ("Oregon", "OR"; "England", "ENG"). A country
+    by name, ISO 3166 alpha-2 or alpha-3 code, or its internet domain where no other country
+    shares it ("United States", "US", "USA"; "United Kingdom", "GB", "GBR", "UK")."""
+
+    def __init__(self, admin1_codes: list[str], admin1_names: list[str], country_codes: list[str],
+                 country_names: list[str], iso3: list[str], tlds: list[str]):
+        country = {cc: j for j, cc in enumerate(country_codes)}
+        self.region_country = [country.get(code.split(".")[0], -1) for code in admin1_codes]
+        self.region_keys, self.region_ids = self._sorted(admin1_names)
+        self.region_codes: dict[str, list[int]] = {}
+        for r, code in enumerate(admin1_codes):
+            self.region_codes.setdefault(code.split(".", 1)[-1].casefold(), []).append(r)
+        self.country_keys, self.country_ids = self._sorted(country_names)
+        self.country_codes: dict[str, set[int]] = {}
+        shared = Counter(tlds)
+        for j, codes in enumerate(zip(country_codes, iso3, tlds)):
+            for k, code in enumerate(codes):
+                if code and (k < 2 or shared[code] == 1):
+                    self.country_codes.setdefault(code.casefold(), set()).add(j)
+
+    @staticmethod
+    def _sorted(names: Iterable[str]) -> tuple[list[str], list[int]]:
+        keyed = sorted((_words(n), j) for j, n in enumerate(names))
+        return [k for k, _ in keyed], [j for _, j in keyed]
+
+    @staticmethod
+    def _named(keys: list[str], ids: list[int], codes: dict, text: str) -> dict[int, bool]:
+        """id -> whether text is all of its name or a code (True), or the start of its name (False)."""
+        span = _prefixed(keys, text)
+        whole = bisect.bisect_right(keys, text, span.start, span.stop)
+        named = dict.fromkeys(ids[whole:span.stop], False)
+        named.update(dict.fromkeys([*ids[span.start:whole], *codes.get(text, ())], True))
+        return named
+
+    def match(self, words: list[str]) -> tuple[dict[int, bool], dict[int, bool]]:
+        """The regions (admin1 indices) and countries (country indices) that qualifier words name, a
+        region, a country, or a region then its country, each -> whether the words name it whole.
+        The last name may be unfinished ("Ore", typed so far): names match by prefix, codes only whole."""
+        text = " ".join(words)
+        regions = self._named(self.region_keys, self.region_ids, self.region_codes, text)
+        countries = self._named(self.country_keys, self.country_ids, self.country_codes, text)
+        for s in range(1, len(words)):
+            if not (named := self._named(self.country_keys, self.country_ids, self.country_codes, " ".join(words[s:]))):
+                continue
+            region = self._named(self.region_keys, self.region_ids, self.region_codes, " ".join(words[:s]))
+            for r, whole in region.items():
+                if whole and self.region_country[r] in named:
+                    regions[r] = regions.get(r, False) or named[self.region_country[r]]
+        return regions, countries
+
+
 def _chord(km: float) -> float:
     """Straight-line distance between unit-sphere points km apart along the surface."""
     return 2.0 * np.sin(min(km / EARTH_RADIUS_KM, np.pi) / 2.0)
@@ -143,16 +229,22 @@ def _parse(directory: Path) -> dict[str, np.ndarray]:
         f = line.split("\t")
         if len(f) >= 2 and f[0]:
             admin1[f[0]] = f[1]
+    admin1_index = {code: j for j, code in enumerate(admin1)}
     countries: dict[str, str] = {}
+    iso3: list[str] = []
+    tlds: list[str] = []
     for line in (directory / COUNTRY_FILE).read_text(encoding="utf-8").split("\n"):
         if line.startswith("#"):
             continue
         f = line.split("\t")
         if len(f) >= 5 and f[0]:
             countries[f[0]] = f[4]
+            iso3.append(f[1])
+            tlds.append(f[9].lstrip(".") if len(f) > 9 else "")
 
     cols: dict[str, list] = {
-        k: [] for k in (*_STR_FIELDS, "alt_names", "country_code", "lat", "lon", "population", "labels")
+        k: [] for k in (*_STR_FIELDS, "alt_names", "aliases", "admin1_index", "country_code", "lat", "lon",
+                        "population", "labels")
     }
     with open(directory / CITIES_FILE, encoding="utf-8") as fh:
         for line in fh:
@@ -167,17 +259,22 @@ def _parse(directory: Path) -> dict[str, np.ndarray]:
             cols["name"].append(f[1])
             cols["asciiname"].append(f[2] or f[1])
             cols["admin1"].append(admin1.get(f"{cc}.{f[10]}", ""))
-            cols["alt_names"].append("|".join(_spellings(f[1], f[3])) if pop >= CITY_MIN_POPULATION else "")
+            cols["admin1_index"].append(admin1_index.get(f"{cc}.{f[10]}", -1))
+            big = pop >= CITY_MIN_POPULATION
+            cols["alt_names"].append("|".join(_spellings(f[1], f[3])) if big else "")
+            cols["aliases"].append("|".join(a for a in dict.fromkeys(f[3].split(",")) if a) if big else "")
             cols["country"].append(countries.get(cc, ""))
             cols["country_code"].append(cc)
             cols["lat"].append(lat)
             cols["lon"].append(lon)
             cols["population"].append(pop)
             cols["labels"].append(f[7] not in NOT_LABEL_FEATURE_CODES)
-    out = {k: _pack(cols[k]) for k in (*_STR_FIELDS, "alt_names")}
+    out = {k: _pack(cols[k]) for k in (*_STR_FIELDS, "alt_names", "aliases")}
     # Name tables by code, for the codes boundary polygons give ("US.CA" -> "California", "US").
     out["admin1_codes"], out["admin1_names"] = _pack(list(admin1)), _pack(list(admin1.values()))
     out["country_codes"], out["country_names"] = _pack(list(countries)), _pack(list(countries.values()))
+    out["country_iso3"], out["country_tlds"] = _pack(iso3), _pack(tlds)  # "USA", "us"; for search
+    out["admin1_index"] = np.array(cols["admin1_index"], dtype=np.int32)  # into admin1_codes, -1 if none
     out["country_code"] = np.array(cols["country_code"], dtype="U2")
     out["lat"] = np.array(cols["lat"], dtype=np.float64)
     out["lon"] = np.array(cols["lon"], dtype=np.float64)
@@ -249,6 +346,14 @@ class Places:
         self.population = cols["population"]
         self.labels = cols["labels"]  # usable as a label (not a section of another place)
         self.alt_names = _unpack(cols["alt_names"])  # "|"-separated; only for cities that can label
+        self.admin1_index = cols["admin1_index"]  # into admin1_codes, -1 if none
+        country_codes = _unpack(cols["country_codes"])
+        country_index = {cc: j for j, cc in enumerate(country_codes)}
+        self.country_index = np.array([country_index.get(cc, -1) for cc in self.country_code], dtype=np.int16)
+        self.qualifiers = _Qualifiers(
+            _unpack(cols["admin1_codes"]), _unpack(cols["admin1_names"]), country_codes,
+            _unpack(cols["country_names"]), _unpack(cols["country_iso3"]), _unpack(cols["country_tlds"]),
+        )
         n = len(self.lat)
         assert all(
             len(a) == n for a in (self.name, self.asciiname, self.admin1, self.country, self.alt_names, self.country_code)
@@ -257,21 +362,21 @@ class Places:
         self.boundaries = boundaries
         self.polygon_areas = self._polygon_areas() if boundaries is not None else []
 
-        # One key per distinct normalized name or ASCII name of each place.
-        keys: list[tuple[str, int]] = []
-        for i in range(n):
-            a, b = normalize(self.name[i]), normalize(self.asciiname[i])
-            keys.append((a, i))
-            if b != a:
-                keys.append((b, i))
+        # One key per distinct normalized name or ASCII name of each place, and per other alternate
+        # name of a city that can label (`aliases`, flagged as such).
+        keys: list[tuple[str, bool, int]] = []
+        for i, aliases in enumerate(_unpack(cols["aliases"])):
+            own = {normalize(self.name[i]), normalize(self.asciiname[i])}
+            keys += [(k, False, i) for k in own]
+            if aliases:
+                keys += [(k, True, i) for k in {normalize(a) for a in aliases.split("|")} - own]
         keys.sort()
-        self._keys = [k for k, _ in keys]
-        self._key_place = np.fromiter((i for _, i in keys), dtype=np.int64, count=len(keys))
-        # Population rank of each key's place (stable: ties by geonames file order).
-        order = np.argsort(-self.population, kind="stable")
-        rank = np.empty(n, dtype=np.int64)
-        rank[order] = np.arange(n)
-        self._key_rank = rank[self._key_place]
+        self._keys = [k for k, _, _ in keys]
+        self._key_alias = np.fromiter((a for _, a, _ in keys), dtype=bool, count=len(keys))
+        self._key_place = np.fromiter((i for _, _, i in keys), dtype=np.int32, count=len(keys))
+        # Population rank of each place (stable: ties by geonames file order).
+        self._rank = np.empty(n, dtype=np.int32)
+        self._rank[np.argsort(-self.population, kind="stable")] = np.arange(n)
 
     @classmethod
     def load(cls, directory: Path, boundaries: Boundaries | None = None) -> "Places | None":
@@ -366,17 +471,42 @@ class Places:
             return self._region_label(here)
         km = float(great_circle_km(lat, lon, self.lat[i], self.lon[i]))
         place = self.describe(i, for_label=True)
-        base, direction = place["base_label"], None
+        area = self._area(here)
+        # Across a border the city is only a landmark: its own region and country would say the
+        # point is somewhere it isn't, so the label names the city alone and then where the point is.
+        in_area = self._in_area(i, here, area)
+        base, direction = (self.name[i] if in_area else place["base_label"]), None
+        where = f", in {in_area}" if in_area else ""
         if km < EXACT_KM:
-            tier, label = "exact", base
+            # "Mannheim" alone would put Ludwigshafen, across the Rhine, in the wrong region.
+            tier, label = "exact", f"near {base}{where}" if in_area else base
         elif km < NEAR_KM:
-            tier, label = "near", f"near {base}"
+            tier, label = "near", f"near {base}{where}"
         else:
             direction = compass(lat, lon, self.lat[i], self.lon[i])
-            tier, label = "offset", f"{km:.0f} km {direction} of {base}"
-        # tier/direction/km/base_label let clients rebuild `label` in other units. `area` is where the
-        # point itself is, which can differ from the city's region or country (across a border).
-        return {**place, "km": round(km, 1), "tier": tier, "direction": direction, "label": label, "area": self._area(here)}
+            tier, label = "offset", f"{km:.0f} km {direction} of {base}{where}"
+        # tier/direction/km/base_label/in_area let clients rebuild `label` in other units. `area` is
+        # where the point itself is, which can differ from the city's region or country.
+        return {**place, "km": round(km, 1), "tier": tier, "direction": direction, "base_label": base,
+                "in_area": in_area, "label": label, "area": area}
+
+    def _in_area(self, i: int, here: tuple[str, str] | None, area: dict | None) -> str | None:
+        """Where the point is, as label text ("Castille and León, Spain"; "France" where its region
+        is unknown or not shown), when city i's label would otherwise name a region or country the
+        point isn't in; else None. Only what the label claims can conflict: a region it hides
+        (regionless, generic, or repeating the city) can't, so Santiago's hidden region conflicts
+        only with a point region that labels would show (O'Higgins). Unknown is never a conflict:
+        no area (open sea, no boundary data), or either region unknown in the same country, leaves
+        the label as it was. Stale over wrong; never guess."""
+        if here is None or area is None:
+            return None
+        cc, admin1 = here
+        if cc == self.country_code[i]:
+            if not admin1 or not self.admin1[i] or admin1 == self.admin1[i]:
+                return None
+            if not area["admin1"] and not self._label_region(i):
+                return None  # neither the label nor the point's area names a region (Sweden)
+        return ", ".join(p for p in (area["admin1"], area["country"]) if p) or None
 
     def _region_label(self, here: tuple[str, str] | None) -> dict | None:
         """No city near: name only the region and country the point is in (from locate)."""
@@ -400,6 +530,7 @@ class Places:
             "tier": "region",
             "direction": None,
             "base_label": base,
+            "in_area": None,  # the label is already where the point is
             "label": f"in {base}",
             "area": self._area(here),
         }
@@ -411,12 +542,16 @@ class Places:
             return False
         return city is None or not region_repeats_city(admin1, city, *spellings)
 
+    def _label_region(self, i: int) -> str:
+        """Place i's region as its label shows it, or "" where labels hide it (_shows_region)."""
+        spellings = (self.asciiname[i], *self.alt_names[i].split("|"))
+        return self.admin1[i] if self._shows_region(self.country_code[i], self.admin1[i], self.name[i], spellings) else ""
+
     def describe(self, i: int, for_label: bool = False) -> dict:
         """Place i's fields. Search results always show the region in base_label; labels
         only where it helps (for_label, see _shows_region)."""
         name, admin1, country = self.name[i], self.admin1[i], self.country[i]
-        spellings = (self.asciiname[i], *self.alt_names[i].split("|"))
-        shown = admin1 if not for_label or self._shows_region(self.country_code[i], admin1, name, spellings) else ""
+        shown = self._label_region(i) if for_label else admin1
         parts: list[str] = []
         for p in (name, shown, country):
             if p and p not in parts:
@@ -436,23 +571,37 @@ class Places:
     # -- search --------------------------------------------------------------
 
     def search(self, q: str, limit: int = 8) -> list[dict]:
-        """Places whose name or ASCII name starts with q (accent/case-insensitive), most populous first."""
-        key = normalize(q.strip())
-        if len(key) < 2 or limit <= 0:
+        """Places whose name (or ASCII or alternate name) starts with q, or with q's first words when
+        the rest name the place's region and/or country (_Qualifiers): "Portland, Oregon", "Paris
+        France". Accent- and case-insensitive. Whole names before partial ones, a place's own name
+        before an alternate one, then the most populous first."""
+        text = normalize(q).strip()
+        if len(text.rstrip(" ,")) < 2 or limit <= 0:
             return []
-        lo = bisect.bisect_left(self._keys, key)
-        hi = bisect.bisect_left(self._keys, key + "\U0010ffff", lo)
-        if lo == hi:
-            return []
-        ranks = self._key_rank[lo:hi]
-        # A place has at most two keys, so the best 2*limit keys hold the best `limit` places.
-        k = min(2 * limit, len(ranks))
-        best = np.argpartition(ranks, k - 1)[:k] if k < len(ranks) else np.arange(len(ranks))
-        best = best[np.argsort(ranks[best])]
-        out: list[int] = []
-        for j in self._key_place[lo + best]:
-            if j not in out:
-                out.append(int(j))
-                if len(out) == limit:
-                    break
-        return [self.describe(i) for i in out]
+        n = len(self)
+        places, scores = [], []
+        for name, qualifier in _readings(text):
+            span = _prefixed(self._keys, name)
+            keys = np.arange(span.start, span.stop)
+            whole = keys < bisect.bisect_right(self._keys, name, span.start, span.stop)
+            place = self._key_place[keys]
+            # Order: whole own name, whole alias, partial own name, partial alias; then by whether the
+            # qualifier names the region or country whole ("MA": Massachusetts before Maine).
+            tier = (np.where(whole, 0, 2) + self._key_alias[keys]) * 2
+            if qualifier and keys.size:
+                regions, countries = self.qualifiers.match(qualifier)
+                region, country = self.admin1_index[place], self.country_index[place]
+
+                def named(only_whole: bool) -> np.ndarray:
+                    pick = lambda d: [k for k, w in d.items() if w or not only_whole]  # noqa: E731
+                    return np.isin(region, pick(regions)) | np.isin(country, pick(countries))
+
+                keep = named(False)
+                tier = tier + ~named(True)
+                tier, place = tier[keep], place[keep]
+            places.append(place)
+            scores.append(tier.astype(np.int64) * n + self._rank[place])
+        place, score = np.concatenate(places), np.concatenate(scores)
+        place = place[np.argsort(score, kind="stable")]
+        _, first = np.unique(place, return_index=True)  # each place at its best score
+        return [self.describe(int(i)) for i in place[np.sort(first)[:limit]]]

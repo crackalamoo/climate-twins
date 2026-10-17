@@ -62,6 +62,7 @@ the first start caches them in `places.npz` there (~1 s).
   "tier": "near",
   "direction": null,
   "base_label": "Talca, Maule, Chile",
+  "in_area": null,
   "label": "near Talca, Maule, Chile",
   "area": {"admin1": "Maule", "country": "Chile"}
 }
@@ -100,10 +101,29 @@ are never used as labels, though search still finds them.
   `base_label` is `"Western Australia, Australia"`, `name` is the region (or the
   country when admin1 is unknown), and `population`, `lat`, `lon` and `km` are `null`.
 
+**A label never names a region or country the cell isn't in.** The city stays the
+landmark even across a border, but when what the label would claim differs from the
+cell's `area` (below), the city's own region and country are dropped and the label
+ends with where the cell is:
+`"93 km SW of Oviedo, in Castille and León, Spain"`, `"near Geneva, in France"`. Then
+`in_area` holds that ending (`"Castille and León, Spain"`: `area`'s region where labels
+show it, else its country alone), and `base_label` is just the city's name. An
+`"exact"` city is then `"near Mannheim, in Rheinland-Pfalz, Germany"`, as the cell
+isn't in it (`tier` stays `"exact"`). What counts as a conflict:
+- The countries differ.
+- Or, in the same country, both regions are known and differ, and either the label
+  shows the city's region or labels would show the cell's. A region the label hides
+  can't be wrong: `"215 km NW of Stockholm, Sweden"` stays (Sweden's regions are never
+  shown), but `"110 km S of Santiago, in O'Higgins Region, Chile"` (Santiago's region
+  is hidden as it repeats the city's name, but the cell's would be shown).
+Anything unknown leaves the label as it was: no `area` (open sea, no boundary data), or
+either region unknown in the same country. `in_area` is `null` otherwise, and always
+in the `"region"` tier.
+
 `area` is where the cell itself is: `{admin1, country}`, with `admin1` `null` where
 labels don't show regions (the rules above) or the region is unknown. It can differ
 from the city's: the labelling city may be across a border or a sea, as in
-`"210 km SW of Al Ḩudaydah, Yemen"` with `area` `{"admin1": null, "country": "Eritrea"}`.
+`"210 km SW of Al Ḩudaydah, in Eritrea"` with `area` `{"admin1": null, "country": "Eritrea"}`.
 It's the name of the Natural Earth admin-1 polygon the cell is in (or, for a coastal
 cell just offshore, the nearest one within 0.25°), or `null` if there's none (open
 sea, the Caspian, a few tiny islands, or no boundary data). Each polygon is named in
@@ -121,12 +141,13 @@ Earth predates some reforms, so a few areas get their former region (Papua for
 what's now Central Papua, Almaty Region for Zhetysu), never one they weren't in. The
 nearest towns aren't used at all: GeoNames maps some countries far more densely than
 their neighbours, so the towns nearest a cell in South Sudan are mostly in Uganda.
-The UI's short name for a place not in or near a city is `area.admin1` when the label
-names that region, else `area.country`.
+The UI's short name for a place not in or near a city is `area.admin1`, else
+`area.country` (labels never name a region the cell isn't in, so it never contradicts them).
 
-`base_label` is the place's own name part (`"Cairns, Queensland, Australia"`). The
-UI rebuilds the label from `tier`, `km`, `direction` and `base_label` so it can show
-miles; it falls back to `label` if `tier` is missing.
+`base_label` is the place's own name part (`"Cairns, Queensland, Australia"`, or just
+`"Oviedo"` with `in_area`). The UI rebuilds the label from `tier`, `km`, `direction`,
+`base_label` and `in_area` so it can show miles; it falls back to `label` if `tier` is
+missing.
 
 Duplicate parts are dropped: when `admin1` equals `name`, or `admin1` is missing.
 `admin1` and `country` are `null` when unknown.
@@ -139,10 +160,22 @@ Place names are optional: when the server has no GeoNames data, every `place` is
 ### `GET /places/search?q=<text>&limit=8`
 
 Autocomplete for the search box.
-- Matching is a case- and accent-insensitive **prefix** match on the place's name
-  and its ASCII name. A query of 2+ characters is required, otherwise the result
-  is `[]`.
-- Results are sorted by population, descending.
+- Matching is case- and accent-insensitive. The query is the start of a place's
+  name or ASCII name (or, for cities of 100,000+, any of its GeoNames alternate
+  names: other languages, former names, `"NYC"`, airport codes like `"PDX"`),
+  optionally followed by its **region and/or country**, with or without commas:
+  `"Portland, Oregon"`, `"portland or"`, `"Paris France"`,
+  `"Portland, Oregon, United States"`. So a result's own `label` finds it again.
+  - A region is its GeoNames admin1 name or code (US states' postal codes,
+    `"ENG"`; many countries' codes are only numbers). A country is its name, ISO
+    alpha-2 or alpha-3 code (`"US"`, `"USA"`), or its internet domain where no other
+    country shares it (`"UK"`). Region before country when both are given.
+  - The last name may be unfinished, as while typing (`"Portland, Ore"`); codes
+    must be whole.
+  A query of 2+ characters is required, otherwise the result is `[]`.
+- Results are sorted by: the whole name before only its start; a place's own name
+  before an alternate one; a region or country named whole before only its start
+  (`"Cambridge, MA"`: Massachusetts before Maryland); then population, descending.
 - Returns `[{name, admin1, country, country_code, population, lat, lon, base_label, label}]`.
   Here `label` (equal to `base_label`) is `"Porto Alegre, Rio Grande do Sul, Brazil"` style, with duplicates
   dropped as above (so Porto, whose admin1 is also "Porto", is `"Porto, Portugal"`).
@@ -202,7 +235,12 @@ legend from this endpoint.
   - a season-shift checkbox (`align=auto|calendar`).
 - Outputs:
   - the heatmap;
-  - numbered pins for the matches and a star for the query;
+  - numbered pins for the matches and a star for the query. A new query place
+    (search, my location, a map click, or the URL on load) eases the map (1 s) to
+    show the star and every pin, clear of the zoom buttons, legend and attribution,
+    the shorter way round the world, between one world across and zoom 5. Moving
+    a slider refits only if a new pin is out of view; selecting or hovering a
+    match, the season-shift checkbox and the units toggle don't refit;
   - a results list (place label, km away, `distance` shown as "climate difference",
     percentile, ⇄ when seasons are shifted);
   - clicking a result flies the map to it and shows a comparison panel. The panel

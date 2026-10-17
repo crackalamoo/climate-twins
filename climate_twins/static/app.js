@@ -36,6 +36,7 @@ const map = new ClimateMap("map", {
   onClick: (lat, lon) => runQuery(lat, lon),
   onMarkerClick: (rank) => select(rank),
   onMarkerHover: (rank) => hover(rank),
+  overlays: [ui.legend],
 });
 
 // ---------------------------------------------------------------- formatting
@@ -46,27 +47,32 @@ function fmtCoord(lat, lon) {
   return `${Math.abs(lat).toFixed(2)}°${ns}, ${Math.abs(lon).toFixed(2)}°${ew}`;
 }
 
-/** A Place label (docs/ui-api.md) in the active units, rebuilt from its structured fields. */
+/**
+ * A Place label (docs/ui-api.md) in the active units, rebuilt from its structured fields. With
+ * `in_area` (the point is across a border from the city), `base_label` is just the city and the label
+ * ends with where the point is; an exact-tier city is then only "near", as the point isn't in it.
+ */
 function placeLabel(place, cell) {
   if (!place) return fmtCoord(cell.lat, cell.lon);
   if (!place.tier) return place.label; // no structured fields: only the metric string
-  if (place.tier === "exact") return place.base_label;
-  if (place.tier === "near") return `near ${place.base_label}`;
   if (place.tier === "region") return `in ${place.base_label}`;
-  return `${fmtDistance(place.km)} ${place.direction} of ${place.base_label}`;
+  const where = place.in_area ? `, in ${place.in_area}` : "";
+  if (place.tier === "exact") return place.in_area ? `near ${place.base_label}${where}` : place.base_label;
+  if (place.tier === "near") return `near ${place.base_label}${where}`;
+  return `${fmtDistance(place.km)} ${place.direction} of ${place.base_label}${where}`;
 }
 
 /**
  * A short name for a place: the city if the point is in or near it; otherwise the point's own region
- * if the label names that region, else the point's own country (`area`: where the point itself is,
- * as the labelling city can be across a border). Null if there is no place.
+ * where labels show it, else the point's own country (`area`: where the point itself is, as the
+ * labelling city can be across a border). Labels never name a region the point isn't in, so this
+ * never contradicts the label. Null if there is no place.
  */
 function shortPlaceName(place) {
   if (!place?.tier) return null;
   if (place.tier === "exact" || place.tier === "near") return place.name;
   const { admin1, country } = place.area ?? {};
-  const regionInLabel = admin1 && place.base_label.split(", ").includes(admin1);
-  return (regionInLabel ? admin1 : country) ?? null;
+  return admin1 ?? country ?? null;
 }
 
 /** more_similar_than_pct_of_land (e.g. 99.994) -> "top 0.006%". */
@@ -116,8 +122,12 @@ function updateUrl(lat, lon) {
   history.replaceState(null, "", `?${qs}`);
 }
 
-/** Run a similarity query; only the latest request's response is rendered. */
-async function runQuery(lat, lon, { fly = false } = {}) {
+/**
+ * Run a similarity query; only the latest request's response is rendered. Then the map shows the
+ * star and all the matches (`fit`): "always" for a new place, "ifHidden" when a slider changes which
+ * matches a place has (move only if one is out of view), "never" to leave the camera be.
+ */
+async function runQuery(lat, lon, { fit = "always" } = {}) {
   queryAbort?.abort();
   const abort = (queryAbort = new AbortController());
   const p = params();
@@ -166,13 +176,16 @@ async function runQuery(lat, lon, { fly = false } = {}) {
   current = data;
   queryPoint = { lat, lon };
   updateUrl(lat, lon);
-  render(data);
+  const pinned = render(data);
   map.setHeatmap({ lat: lat.toFixed(4), lon: lon.toFixed(4), align: p.align, exclude_km: p.exclude });
-  if (fly) map.flyTo(lat, lon, 2);
+  if (fit === "never") return;
+  await pinned;
+  if (!abort.signal.aborted) map.fitResults({ ifHidden: fit === "ifHidden" });
 }
 
 // ---------------------------------------------------------------- rendering
 
+/** Show a /similar response in the panel and on the map; resolves once the pins are on the map. */
 function render(data) {
   const q = data.query;
   const colors = matchColors(data.matches, heatStops);
@@ -209,10 +222,11 @@ function render(data) {
   }
 
   map.setQuery(q.cell.lat, q.cell.lon);
-  map.setMatches(data.matches, colors);
+  const pinned = map.setMatches(data.matches, colors);
   selectedRank = null;
   ui.compare.hidden = true;
   ui.compare.innerHTML = "";
+  return pinned;
 }
 
 function showComparison(match) {
@@ -300,7 +314,7 @@ function choose(i) {
   if (!p) return;
   ui.search.value = p.label;
   closeSuggestions();
-  runQuery(p.lat, p.lon, { fly: true });
+  runQuery(p.lat, p.lon);
 }
 
 async function fetchSuggestions(q) {
@@ -354,7 +368,7 @@ ui.locate.addEventListener("click", () => {
   }
   showMessage("Finding your location…", "info");
   navigator.geolocation.getCurrentPosition(
-    (pos) => runQuery(pos.coords.latitude, pos.coords.longitude, { fly: true }),
+    (pos) => runQuery(pos.coords.latitude, pos.coords.longitude),
     (err) => {
       const hint = window.isSecureContext ? "" : " (browsers only allow this on https or localhost)";
       showMessage(`Couldn't get your location: ${err.message}${hint}`);
@@ -370,9 +384,9 @@ for (const [input, out] of [
   [ui.suppress, ui.suppressOut],
 ]) {
   input.addEventListener("input", () => (out.textContent = fmtSliderKm(input.value)));
-  input.addEventListener("change", () => queryPoint && runQuery(queryPoint.lat, queryPoint.lon));
+  input.addEventListener("change", () => queryPoint && runQuery(queryPoint.lat, queryPoint.lon, { fit: "ifHidden" }));
 }
-ui.align.addEventListener("change", () => queryPoint && runQuery(queryPoint.lat, queryPoint.lon));
+ui.align.addEventListener("change", () => queryPoint && runQuery(queryPoint.lat, queryPoint.lon, { fit: "never" }));
 
 /** Show the active units on the toggle and slider readouts. */
 function showUnits() {
@@ -415,10 +429,7 @@ function initFromUrl() {
 
   const lat = num("lat");
   const lon = num("lon");
-  if (lat !== null && lon !== null) {
-    map.jumpTo(lat, lon, 2);
-    runQuery(lat, lon);
-  }
+  if (lat !== null && lon !== null) runQuery(lat, lon); // eases from the world view to the results
 }
 
 // The heatmap's colour stops, which also colour the match pins (null: pins fall back to one colour).

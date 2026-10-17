@@ -291,19 +291,37 @@ GEONAMES_ROWS = [
     # A region split after Natural Earth drew it: most of the old Almaty Region's towns are now in Zhetysu.
     *((f"Almaty {k}", f"Almaty {k}", 44.1 + 0.1 * k, 78.0, "KZ", "10", 900, "PPL") for k in range(2)),
     *((f"Zhetysu {k}", f"Zhetysu {k}", 44.6 + 0.1 * k, 78.0, "KZ", "17", 900, "PPL") for k in range(3)),
+    # Search by name and region or country.
+    ("Portland", "Portland", 45.52, -122.68, "US", "OR", 652_503, "PPLA2"),
+    ("Portland", "Portland", 43.66, -70.25, "US", "ME", 68_408, "PPLA2"),
+    ("Portland", "Portland", 50.57, -2.44, "GB", "ENG", 12_710, "PPL"),
+    ("Paris", "Paris", 48.85, 2.35, "FR", "11", 2_138_551, "PPLC"),
+    ("Paris", "Paris", 33.66, -95.56, "US", "TX", 24_782, "PPLA2"),
+    ("Parisot", "Parisot", 44.26, 1.86, "FR", "76", 500, "PPL"),
+    ("New York City", "New York City", 40.71, -74.01, "US", "NY", 8_804_190, "PPL"),
+    ("Bridgetown", "Bridgetown", 13.1, -59.62, "BB", "08", 98_511, "PPLC"),
+    ("Cambridge", "Cambridge", 42.37, -71.11, "US", "MA", 118_403, "PPL"),
+    ("Cambridge", "Cambridge", 38.56, -76.08, "US", "MD", 500_000, "PPL"),  # not really this big
 ]
+# Alternate names beyond the name and ASCII name, by name (search only uses them for cities
+# that can label). Portland's "Bridgetown" is a nickname.
+GEONAMES_ALIASES = {"New York City": "NYC,Big Apple,NY", "Portland": "PDX,Bridgetown"}
 GEONAMES_ADMIN1 = {
     "BR.27": "São Paulo", "BR.13": "Maranhão", "BR.23": "Rio Grande do Sul", "PT.17": "Porto",
     "CH.ZH": "Zurich", "US.MN": "Minnesota", "SA.10": "Riyadh Region",
     "RU.91": "Krasnoyarsk Krai", "LY.34": "Sabha District", "CN.10": "Hebei", "CN.14": "Tibet",
     "SS.01": "Central Equatoria", "UG.N": "Northern Region",
     "NO.21": "Trøndelag", "KZ.10": "Almaty Region", "KZ.17": "Zhetysu Region",
+    "US.OR": "Oregon", "US.ME": "Maine", "US.TX": "Texas", "US.NY": "New York", "US.MA": "Massachusetts", "US.MD": "Maryland", "GB.ENG": "England",
+    "FR.11": "Île-de-France", "FR.76": "Occitanie", "BB.08": "Saint Michael",
 }
 GEONAMES_COUNTRIES = {
     "BR": "Brazil", "PT": "Portugal", "CH": "Switzerland", "US": "United States", "SA": "Saudi Arabia", "TD": "Chad",
     "RU": "Russia", "LY": "Libya", "CN": "China", "ER": "Eritrea", "SS": "South Sudan", "UG": "Uganda",
-    "NO": "Norway", "KZ": "Kazakhstan",
+    "NO": "Norway", "KZ": "Kazakhstan", "GB": "United Kingdom", "FR": "France", "BB": "Barbados",
 }
+# ISO 3166 alpha-3 codes and internet domains, where search tests need them (else "XXX" and none).
+GEONAMES_COUNTRY_CODES = {"US": ("USA", ".us"), "GB": ("GBR", ".uk"), "FR": ("FRA", ".fr")}
 
 
 def write_geonames(directory: Path, rows=GEONAMES_ROWS) -> Path:
@@ -311,7 +329,8 @@ def write_geonames(directory: Path, rows=GEONAMES_ROWS) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     lines = []
     for gid, (name, ascii_, lat, lon, cc, a1, pop, code) in enumerate(rows, 1):
-        f = [str(gid), name, ascii_, f"{name},{ascii_}", str(lat), str(lon), "P", code, cc, "", a1,
+        alt = ",".join(filter(None, (name, ascii_, GEONAMES_ALIASES.get(name))))
+        f = [str(gid), name, ascii_, alt, str(lat), str(lon), "P", code, cc, "", a1,
              "", "", "", str(pop), "", "100", "Etc/UTC", "2024-01-01"]
         lines.append("\t".join(f))
     (directory / "cities500.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -319,8 +338,12 @@ def write_geonames(directory: Path, rows=GEONAMES_ROWS) -> Path:
         "".join(f"{k}\t{v}\t{v}\t1\n" for k, v in GEONAMES_ADMIN1.items()), encoding="utf-8"
     )
     (directory / "countryInfo.txt").write_text(
-        "# GeoNames country info\n#ISO\tISO3\tISO-Numeric\tfips\tCountry\n"
-        + "".join(f"{cc}\tXXX\t000\t{cc}\t{name}\tCapital\n" for cc, name in GEONAMES_COUNTRIES.items()),
+        "# GeoNames country info\n#ISO\tISO3\tISO-Numeric\tfips\tCountry\tCapital\tArea\tPopulation\tContinent\ttld\n"
+        + "".join(
+            f"{cc}\t{iso3}\t000\t{cc}\t{name}\tCapital\t1\t1\tXX\t{tld}\n"
+            for cc, name in GEONAMES_COUNTRIES.items()
+            for iso3, tld in [GEONAMES_COUNTRY_CODES.get(cc, ("XXX", ""))]
+        ),
         encoding="utf-8",
     )
     return directory

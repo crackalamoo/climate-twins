@@ -77,7 +77,7 @@ class TestLabel:
         assert places.label_for(lat, lon)["area"] == area
 
     def test_sections_are_searchable_but_never_labels(self, places: Places):
-        assert [p["name"] for p in places.search("midtown")] == ["Midtown Heights", "Midtown"]
+        assert [p["name"] for p in places.search("midtown")] == ["Midtown", "Midtown Heights"]
         assert places.label_for(45.01, -95.01)["name"] == "Midtown"
 
 
@@ -135,6 +135,82 @@ class TestArea:
         assert places.locate(4.3, 32.0 + 360.0)[0] == "SS"
 
 
+@pytest.fixture(scope="module")
+def brazil(geonames_dir: Path, tmp_path_factory) -> Places:
+    """Porto Alegre (Rio Grande do Sul) and São Paulo (São Paulo, hidden as it repeats the city),
+    each in its own region with a strip of another region to its west; south of Porto Alegre, a
+    polygon of unknown region."""
+    return places_with(geonames_dir, tmp_path_factory.mktemp("ne"), [
+        ("BR", "BR.13", "Maranhão", "Maranhão", _box(-52, -31, -51.4, -29)),
+        ("BR", "BR.23", "Rio Grande do Sul", "Rio Grande do Sul", _box(-51.4, -31, -50, -29)),
+        ("BR", "BR.23", "Rio Grande do Sul", "Rio Grande do Sul", _box(-47.5, -24, -46.8, -23)),
+        ("BR", "BR.27", "São Paulo", "São Paulo", _box(-46.8, -24.5, -46, -23)),
+        ("BR", "-1", "Nowhere", "", _box(-52, -33, -50, -31)),  # no code, no towns: region unknown
+    ])
+
+
+class TestAcrossABorder:
+    """A label never names a region or country the point isn't in: across a border from the
+    city it names the city alone, then where the point is (`in_area`)."""
+
+    def test_same_region_is_unchanged(self, places: Places, brazil: Places):
+        p = places.label_for(45.0, -96.5)
+        assert p["label"] == "39 km W of Bigcity, Minnesota, United States"
+        assert p["in_area"] is None and p["base_label"] == "Bigcity, Minnesota, United States"
+        assert brazil.label_for(-30.03, -51.0)["label"] == "near Porto Alegre, Rio Grande do Sul, Brazil"
+        assert brazil.label_for(-23.55, -46.7)["label"] == "near São Paulo, Brazil"  # hidden, but the same
+
+    def test_another_region_of_the_same_country(self, brazil: Places):
+        p = brazil.label_for(-30.03, -51.6)
+        assert p["label"] == "36 km W of Porto Alegre, in Maranhão, Brazil"
+        assert (p["base_label"], p["in_area"]) == ("Porto Alegre", "Maranhão, Brazil")
+        assert p["area"] == {"admin1": "Maranhão", "country": "Brazil"}
+        assert (p["name"], p["admin1"]) == ("Porto Alegre", "Rio Grande do Sul")  # still the city's
+
+    def test_a_hidden_city_region_conflicts_only_with_a_shown_point_region(self, brazil: Places):
+        # São Paulo's region repeats the city, so the label claims none; the point's would be shown.
+        assert brazil.label_for(-23.55, -46.9)["label"] == "28 km W of São Paulo, in Rio Grande do Sul, Brazil"
+
+    def test_an_unknown_region_in_the_same_country_is_unchanged(self, brazil: Places):
+        p = brazil.label_for(-31.2, -51.23)
+        assert p["area"] == {"admin1": None, "country": "Brazil"}
+        assert p["in_area"] is None and p["label"].endswith(" of Porto Alegre, Rio Grande do Sul, Brazil")
+
+    def test_another_country_with_a_known_region(self, geonames_dir: Path, tmp_path: Path):
+        p = places_with(geonames_dir, tmp_path, [("CN", "CN.14", "Xizang", "Tibet", _box(-97, 44, -96.02, 46))])
+        assert p.label_for(45.0, -96.5)["label"] == "39 km W of Bigcity, in Tibet, China"
+        # Within 5 km the label is normally just the city, but the point isn't in it.
+        exact = p.label_for(45.0, -96.03)
+        assert (exact["tier"], exact["label"]) == ("exact", "near Bigcity, in Tibet, China")
+        assert (exact["base_label"], exact["in_area"]) == ("Bigcity", "Tibet, China")
+
+    @pytest.mark.parametrize("lat, lon, label", [
+        (15.0, 30.0, "107 km W of Portcity, in Eritrea"),  # region unknown
+        (3.5, 32.0, "222 km S of Northtown, in Uganda"),  # region hidden ("Northern Region" is generic)
+    ])
+    def test_another_country_with_no_region_to_show(self, places: Places, lat, lon, label):
+        p = places.label_for(lat, lon)
+        assert p["label"] == label and p["in_area"] == p["area"]["country"]
+
+    def test_a_country_whose_regions_labels_hide_is_unchanged(self, tmp_path: Path):
+        # Kazakhstan's regions aren't shown, so the label claims none and can't be wrong.
+        rows = [*GEONAMES_ROWS, ("Bigalmaty", "Bigalmaty", 43.25, 76.9, "KZ", "10", 2_000_000, "PPL")]
+        p = places_with(write_geonames(tmp_path / "g", rows), tmp_path / "ne",
+                        [("KZ", "KZ.17", "Zhetysu", "Zhetysu Region", _box(77.5, 43, 78.5, 43.5))])
+        assert p.locate(43.25, 78.0) == ("KZ", "Zhetysu Region")
+        label = p.label_for(43.25, 78.0)
+        assert label["label"] == "89 km E of Bigalmaty, Kazakhstan" and label["in_area"] is None
+
+    def test_unknown_area_is_unchanged(self, places: Places, geonames_dir: Path):
+        assert places.locate(4.3, 34.0) is None  # beyond every polygon
+        p = places.label_for(4.3, 34.0)
+        assert p["in_area"] is None and p["label"].endswith(" of Northtown, South Sudan")
+        assert Places.load(geonames_dir).label_for(45.0, -96.5)["in_area"] is None  # no boundary data
+
+    def test_region_tier_has_no_in_area(self, places: Places):
+        assert places.label_for(25.0, 45.0)["in_area"] is None
+
+
 class TestBoundaries:
     def test_no_boundary_files(self, tmp_path: Path, caplog):
         assert Boundaries.load(tmp_path) is None
@@ -173,15 +249,75 @@ class TestSearch:
             assert [p["name"] for p in places.search(q)] == ["São Paulo", "São Luís"]
         assert [p["name"] for p in places.search("zur")] == ["Zürich"]
 
-    def test_sorted_by_population_and_deduplicated(self, places: Places):
-        assert [p["name"] for p in places.search("porto")] == ["Porto Alegre", "Porto"]
+    def test_whole_names_first_then_by_population(self, places: Places):
+        assert [p["name"] for p in places.search("porto")] == ["Porto", "Porto Alegre"]
+        assert [p["name"] for p in places.search("port")] == ["Portcity", "Porto Alegre", "Portland", "Porto", "Portland", "Portland"]
         assert places.search("s") == []  # too short
         assert [p["name"] for p in places.search("sa", limit=2)] == ["São Paulo", "São Luís"]
+
+    @pytest.mark.parametrize("q", [
+        "Portland, Oregon", "portland oregon", "Portland OR", "Portland, OR", "PORTLAND,OREGON",
+        "Portland, Oregon, United States", "Portland Oregon USA", "Portland, OR, US",
+        "Portland, Ore",  # still typing
+        "Portland Oregon United St",
+    ])
+    def test_name_then_region_and_or_country(self, places: Places, q):
+        assert [(p["name"], p["admin1"]) for p in places.search(q)] == [("Portland", "Oregon")]
+
+    @pytest.mark.parametrize("q, expected", [
+        ("Portland, United States", ["Oregon", "Maine"]),
+        ("Portland, UK", ["England"]),  # a country by its internet domain
+        ("Portland GBR", ["England"]),  # ... or ISO alpha-3 code
+        ("Portland, England", ["England"]),
+        ("Portland, England, United Kingdom", ["England"]),
+        ("Portland, M", ["Maine"]),  # a region or country beginning with M
+        ("Portland, Oregon, United Kingdom", []),  # Oregon isn't in the UK
+        ("Portland, United States, Oregon", []),  # region before country
+        ("Portland O", ["Oregon"]),
+        ("Portland, ", ["Oregon", "Maine", "England"]),
+    ])
+    def test_qualifier_filters(self, places: Places, q, expected):
+        assert [p["admin1"] for p in places.search(q)] == expected
+
+    def test_whole_qualifiers_before_partial_ones(self, places: Places):
+        # "MA" is Massachusetts' code and the start of Maryland.
+        assert [p["admin1"] for p in places.search("Cambridge, MA")] == ["Massachusetts", "Maryland"]
+        assert [p["admin1"] for p in places.search("Cambridge, Ma")] == ["Massachusetts", "Maryland"]
+        assert [p["admin1"] for p in places.search("Cambridge, Mar")] == ["Maryland"]
+
+    def test_qualifier_codes_match_only_whole(self, places: Places):
+        assert [p["admin1"] for p in places.search("Portland, U")] == ["Oregon", "Maine", "England"]  # United ...
+        assert [p["admin1"] for p in places.search("Portland, Or")] == ["Oregon"]  # a code and a prefix
+        assert places.search("Portland, ORE, US") == []  # codes are whole: no region "ORE"
+
+    def test_country_alone(self, places: Places):
+        assert [p["admin1"] for p in places.search("Paris, France")] == ["Île-de-France", "Occitanie"]  # Parisot
+        assert places.search("paris fr")[0]["admin1"] == "Île-de-France"
+        assert [p["admin1"] for p in places.search("Paris Texas")] == ["Texas"]
+        assert [p["name"] for p in places.search("Pari, France")] == ["Paris", "Parisot"]  # the name too can be partial
+
+    def test_the_suggested_label_finds_its_place(self, places: Places):
+        for i in range(len(places)):
+            p = places.describe(i)
+            assert p in places.search(p["label"], limit=50), p["label"]
+
+    def test_alternate_names_of_big_cities(self, places: Places):
+        assert [p["name"] for p in places.search("NYC")] == ["New York City"]
+        assert [p["name"] for p in places.search("big app")] == ["New York City"]
+        assert [p["name"] for p in places.search("New York, NY")] == ["New York City"]
+        assert [p["admin1"] for p in places.search("pdx")] == ["Oregon"]
+        # A place's own name before another's alternate name, though that city is bigger.
+        assert [(p["name"], p["country"]) for p in places.search("bridgetown")][:2] == [
+            ("Bridgetown", "Barbados"), ("Portland", "United States")]
+
+    def test_alternate_names_only_for_cities_that_can_label(self, places: Places):
+        # GeoNames lists "Bridgetown" for every Portland in the fixture; only those of 100,000+ match it.
+        assert [p["admin1"] for p in places.search("bridgetown") if p["name"] == "Portland"] == ["Oregon"]
 
 
 def test_cache_is_used_and_rebuilt_when_stale(tmp_path: Path):
     d = write_geonames(tmp_path / "g")
-    assert Places.load(d).search("porto")[0]["name"] == "Porto Alegre"
+    assert Places.load(d).search("porto")[0]["population"] == 249_633
     cache = d / CACHE_FILE
     assert cache.exists()
     built = cache.stat().st_mtime
@@ -190,7 +326,7 @@ def test_cache_is_used_and_rebuilt_when_stale(tmp_path: Path):
     rows = [r if r[0] != "Porto" else (*r[:6], 9_000_000, r[7]) for r in GEONAMES_ROWS]
     write_geonames(d, rows)
     os.utime(d / "cities500.txt", (built + 10, built + 10))
-    assert Places.load(d).search("porto")[0]["name"] == "Porto"
+    assert Places.load(d).search("porto")[0]["population"] == 9_000_000
 
 
 @pytest.mark.parametrize("region, city, repeats", [

@@ -86,6 +86,9 @@ def test_places_search(client: TestClient):
     (p,) = r.json()
     assert p["name"] == "São Paulo" and p["label"]
     assert client.get("/places/search").json() == []
+    (p,) = client.get("/places/search", params={"q": "Portland, OR, USA"}).json()
+    assert p["label"] == "Portland, Oregon, United States"
+    assert client.get("/places/search", params={"q": p["label"]}).json() == [p]
 
 
 def test_health_counts_boundaries(client: TestClient, built: tuple[Path, dict], geonames_dir: Path):
