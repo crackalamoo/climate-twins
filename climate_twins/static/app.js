@@ -1,6 +1,6 @@
 // Climate Twins UI: wires the search box, controls, map, results list and comparison panel.
-// Query state lives in the URL (?lat&lon&exclude&suppress&align); the display units
-// (units.js) live only in memory.
+// Query state lives in the URL (?lat&lon&exclude&suppress&align); the display units (units.js)
+// live only in memory.
 
 import { ClimateMap, matchColors, renderLegend } from "./map.js";
 import { escapeHtml, renderComparison, statsHtml } from "./charts.js";
@@ -18,6 +18,7 @@ const ui = {
   suppress: $("suppress"),
   suppressOut: $("suppress-out"),
   align: $("align"),
+  adjust: $("adjust"),
   units: $("units"),
   message: $("message"),
   empty: $("empty"),
@@ -44,13 +45,18 @@ const map = new ClimateMap("map", {
 function fmtCoord(lat, lon) {
   const ns = lat >= 0 ? "N" : "S";
   const ew = lon >= 0 ? "E" : "W";
-  return `${Math.abs(lat).toFixed(2)}°${ns}, ${Math.abs(lon).toFixed(2)}°${ew}`;
+  return `${fmtDegMin(lat)} ${ns}, ${fmtDegMin(lon)} ${ew}`;
+}
+
+/** |deg| as degrees and whole minutes, "45°31′": a minute (~2 km) is finer than the ~4 km grid. */
+function fmtDegMin(deg) {
+  const minutes = Math.round(Math.abs(deg) * 60);
+  return `${Math.floor(minutes / 60)}°${String(minutes % 60).padStart(2, "0")}′`;
 }
 
 /**
- * A Place label (docs/ui-api.md) in the active units, rebuilt from its structured fields. With
- * `in_area` (the point is across a border from the city), `base_label` is just the city and the label
- * ends with where the point is; an exact-tier city is then only "near", as the point isn't in it.
+ * A Place label (docs/api.md) in the active units, rebuilt from its structured fields. With
+ * `in_area` (the point is across a border from the city), an exact-tier city is only "near".
  */
 function placeLabel(place, cell) {
   if (!place) return fmtCoord(cell.lat, cell.lon);
@@ -63,10 +69,32 @@ function placeLabel(place, cell) {
 }
 
 /**
- * A short name for a place: the city if the point is in or near it; otherwise the point's own region
- * where labels show it, else the point's own country (`area`: where the point itself is, as the
- * labelling city can be across a border). Labels never name a region the point isn't in, so this
- * never contradicts the label. Null if there is no place.
+ * A place label as two lines, [primary, secondary]: "120 km NW of Boise" / "Idaho, United States".
+ * The second line is where the point is (the city's region and country, or `in_area` when the point
+ * is across a border from it), or null when there's nothing to add.
+ */
+function placeLines(place, cell) {
+  if (!place) return [fmtCoord(cell.lat, cell.lon), null];
+  if (!place.tier) return [place.label, null];
+  const { name, base_label: base, in_area: inArea } = place;
+  // base_label is "name, region, country" (or just the name with in_area); keep it whole if it isn't
+  const [city, rest] = base.startsWith(`${name}, `) ? [name, base.slice(name.length + 2)] : [base, null];
+  const where = inArea ?? rest;
+  if (place.tier === "region") return [city, rest];
+  if (place.tier === "exact") return [inArea ? `near ${city}` : city, where];
+  if (place.tier === "near") return [`near ${city}`, where];
+  return [`${fmtDistance(place.km)} ${place.direction} of ${city}`, where];
+}
+
+/** A place label's two lines (placeLines) as HTML. */
+function placeLinesHtml(place, cell) {
+  const [primary, secondary] = placeLines(place, cell);
+  return `<span class="primary">${escapeHtml(primary)}</span>${secondary ? `<span class="secondary">${escapeHtml(secondary)}</span>` : ""}`;
+}
+
+/**
+ * A short name for a place: the city if the point is in or near it; else the point's own region where
+ * labels show it, else its own country (from `area`, as the labelling city can be across a border).
  */
 function shortPlaceName(place) {
   if (!place?.tier) return null;
@@ -196,7 +224,7 @@ async function runQuery(lat, lon, { fit = "always" } = {}) {
   }
   if (abort.signal.aborted) return;
 
-  await legendReady; // pins are coloured on the heatmap's scale
+  await legendReady; // ranks are coloured on the heatmap's scale
   if (abort.signal.aborted) return;
 
   clearMessage();
@@ -220,9 +248,10 @@ function render(data) {
   ui.legend.hidden = !ui.legend.childElementCount; // with a heatmap to explain (and a legend to show)
 
   ui.querySummary.innerHTML = `
-    <h2><span class="star">★</span> ${escapeHtml(placeLabel(q.place, q.cell))}</h2>
+    <h2 title="${escapeHtml(placeLabel(q.place, q.cell))}"><span class="star">★</span> ${placeLinesHtml(q.place, q.cell)}</h2>
     ${q.place ? `<div class="coords">${fmtCoord(q.cell.lat, q.cell.lon)}</div>` : ""}
-    <div class="stats">${statsHtml(q.summary)}</div>`;
+    <div class="stats">${statsHtml(q.summary)}</div>
+    <h3 class="twins">Its climate twins</h3>`;
   ui.querySummary.hidden = false;
 
   ui.results.innerHTML = "";
@@ -232,18 +261,18 @@ function render(data) {
   for (const m of data.matches) {
     const li = document.createElement("li");
     li.dataset.rank = m.rank;
-    li.style.setProperty("--rank-color", colors.get(m.rank)); // same colour as its map pin
+    li.style.setProperty("--rank-color", colors.get(m.rank)); // the heatmap's colour at its similarity
     const shift = m.seasons_shifted_6_months
       ? ` <span class="shift" title="Seasons shifted 6 months: its climate matches the query's six months later (e.g. the other hemisphere)">⇄</span>`
       : "";
     // The raw climate difference stays in a tooltip: on the comparison line, else on "away".
     const ruler = rulerLine(m, data.ruler, q.place);
     const difference = `Climate difference ${m.distance.toFixed(2)} (0 = identical): the gap between their standardized monthly features.`;
+    const away = `<span class="meta"${ruler ? "" : ` title="${escapeHtml(difference)}"`}>${fmtDistance(m.km_from_query)} away</span>`;
     li.innerHTML = `
       <span class="rank">${m.rank}</span>
-      <span class="label" title="${escapeHtml(placeLabel(m.place, m.cell))}">${escapeHtml(placeLabel(m.place, m.cell))}</span>
+      <span class="label" title="${escapeHtml(placeLabel(m.place, m.cell))}">${placeLinesHtml(m.place, m.cell)}${away}</span>
       <span class="flags">${shift}</span>
-      <span class="meta"${ruler ? "" : ` title="${escapeHtml(difference)}"`}>${fmtDistance(m.km_from_query)} away</span>
       ${ruler ? `<span class="meta ruler" title="${escapeHtml(ruler.title)}">${escapeHtml(ruler.text)}</span>` : ""}`;
     // Mouse only: a tap would leave the row and its pin highlighted, with no "leave" to clear them.
     li.addEventListener("pointerenter", (e) => e.pointerType === "mouse" && hover(m.rank));
@@ -263,10 +292,10 @@ function render(data) {
 function showComparison(match) {
   const labels = {
     query: placeLabel(current.query.place, current.query.cell),
-    match: placeLabel(match.place, match.cell),
     queryName: shortPlaceName(current.query.place),
     matchName: shortPlaceName(match.place),
     verdictName: queryName(current.query.place) ?? "your spot", // as the results' comparison lines name it
+    matchLines: placeLines(match.place, match.cell),
   };
   ui.compare.hidden = false; // before rendering: the charts take the panel's width
   renderComparison(ui.compare, current.query, match, labels);
@@ -411,6 +440,10 @@ ui.locate.addEventListener("click", () => {
 
 // ---------------------------------------------------------------- controls
 
+ui.adjust.addEventListener("click", () => {
+  ui.adjust.setAttribute("aria-expanded", String(ui.adjust.getAttribute("aria-expanded") !== "true"));
+});
+
 for (const [input, out] of [
   [ui.exclude, ui.excludeOut],
   [ui.suppress, ui.suppressOut],
@@ -464,7 +497,7 @@ function initFromUrl() {
   if (lat !== null && lon !== null) runQuery(lat, lon); // eases from the world view to the results
 }
 
-// The heatmap's colour stops, which also colour the match pins (null: pins fall back to one colour).
+// The heatmap's colour stops, which also colour the results' ranks (null: they fall back to one colour).
 let heatStops = null;
 const legendReady = fetch("/heatmap/legend")
   .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))

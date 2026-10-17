@@ -1,22 +1,83 @@
+/* A printed atlas. Warm paper and ink, Libre Caslon Text (SIL OFL, static/fonts/) for names,
+   numbers and prose; a quiet sans for the small UI text. The data colours (query ink, match red,
+   rank colours, chart washes) stand out against it. */
+
+@font-face {
+  font-family: "Libre Caslon Text";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(fonts/libre-caslon-text-latin-400-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Libre Caslon Text";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(fonts/libre-caslon-text-latin-ext-400-normal.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Libre Caslon Text";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url(fonts/libre-caslon-text-latin-400-italic.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Libre Caslon Text";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url(fonts/libre-caslon-text-latin-ext-400-italic.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Libre Caslon Text";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(fonts/libre-caslon-text-latin-700-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Libre Caslon Text";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(fonts/libre-caslon-text-latin-ext-700-normal.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
 :root {
-  --bg: #ffffff;
-  --panel: #fafaf8;
-  --border: #e2e1dc;
-  --text: #1f1f1d;
-  --muted: #6b6a64;
-  --query: #2a78d6;   /* query: blue, the star; the only cool colour on the map (pins take the heatmap's purples) */
-  --match: #8e2c8a;   /* the match being compared, in charts and tables: one constant purple, from the pins' family
-                         (rank colours are only for setting matches against each other: map pins, result list) */
-  --hover: #f1f0ec;    /* hovered rows and suggestions; pressed toggles */
-  --selected: #f3edf6; /* the selected match: a whisper of the pins' purple */
+  --bg: #fbf8f1;        /* inputs and buttons: a lighter sheet on the paper */
+  --panel: #f3eee2;     /* the paper */
+  --border: #ddd4c2;    /* hairline rules */
+  --rule: #b9ad96;      /* the heavier rules that set sections apart */
+  --text: #2a251e;      /* warm ink */
+  --muted: #7a6f5f;
+  --query: #2a2420;     /* query: ink, like its star on the map */
+  --match: #b5482f;     /* the compared match in charts and tables: one red, like a map's overprint
+                           (rank colours only set matches against each other) */
+  --hover: #ebe4d4;     /* hovered rows and suggestions; pressed toggles */
+  --selected: #ece2e4;  /* the selected match: a whisper of red, on paper */
   --error-bg: #fdf0ec;
   --error: #a33a14;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-size: 14px;
+  --diff-bar: #a99d87;  /* the "what makes up the difference" bars */
+  --serif: "Libre Caslon Text", "Iowan Old Style", Georgia, serif;
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--sans);
+  font-size: 13px;
+  /* old-style figures in running text, lining ones in tables and charts. A feature setting rather
+     than font-variant-numeric, which every `font:` shorthand below would reset */
+  font-feature-settings: "onum";
   color: var(--text);
 }
 
 * { box-sizing: border-box; }
+::selection { background: #e4d8bd; }
 
 html, body { height: 100%; margin: 0; }
 
@@ -33,35 +94,39 @@ body {
   height: 100dvh;
   overflow-y: auto;
   scrollbar-gutter: stable; /* a scrollbar appearing doesn't change the width the charts are drawn at */
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--rule);
   background: var(--panel);
-  padding: 12px 14px 24px;
+  padding: 20px 22px 24px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
+/* search and buttons: squared off, on the lighter sheet */
 .search-row { display: flex; gap: 6px; }
 .search { position: relative; flex: 1; }
 
 #search {
   width: 100%;
-  padding: 7px 9px;
+  padding: 8px 10px;
   font: inherit;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 2px;
   background: var(--bg);
 }
+#search:focus { outline: 1px solid var(--rule); outline-offset: 0; border-color: var(--rule); }
+#search::placeholder { color: var(--muted); }
 
 button {
   font: inherit;
   padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 2px;
   background: var(--bg);
   cursor: pointer;
 }
-@media (hover: hover) { button:hover { background: #f0efea; } }
+@media (hover: hover) { button:hover { background: var(--hover); } }
+#locate { color: var(--text); }
 
 #suggestions {
   position: absolute;
@@ -74,8 +139,8 @@ button {
   list-style: none;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgb(0 0 0 / 0.12);
+  border-radius: 2px;
+  box-shadow: 0 3px 10px rgb(60 45 20 / 0.12);
   max-height: 320px;
   overflow-y: auto;
 }
@@ -84,24 +149,44 @@ button {
 #suggestions li[aria-selected="true"] { background: var(--hover); }
 @media (hover: hover) { #suggestions li:hover { background: var(--hover); } }
 
+/* settings: behind "Adjust" (collapsed), and not before there's a place to adjust */
+.adjust {
+  display: block;
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+.adjust::after { content: " ▸"; font-size: 10px; }
+.adjust[aria-expanded="true"]::after { content: " ▾"; }
+@media (hover: hover) { .adjust:hover { background: none; color: var(--text); } }
+.adjust[aria-expanded="false"] + .controls,
+#empty:not([hidden]) ~ .adjust,
+#empty:not([hidden]) ~ .controls { display: none; }
+
 .controls {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 4px 12px;
+  margin-top: -4px;
+  padding: 8px 0 4px;
   font-size: 12px;
   color: var(--muted);
 }
 .controls label { display: flex; flex-direction: column; }
 .controls output { color: var(--text); font-variant-numeric: tabular-nums; }
 .controls input[type="range"] { width: 100%; margin: 2px 0 0; }
-.controls input { accent-color: #52514e; } /* controls stay neutral; colour is for data */
+.controls input { accent-color: #6d6152; } /* controls stay neutral; colour is for data */
 .controls .check { flex-direction: row; align-items: center; gap: 4px; }
 
 /* metric / US units: a two-option segmented control */
 .units { display: flex; justify-self: end; align-self: center; }
 .units button { padding: 2px 7px; font-size: 11px; color: var(--muted); border-radius: 0; }
-.units button:first-child { border-radius: 6px 0 0 6px; }
-.units button:last-child { border-radius: 0 6px 6px 0; margin-left: -1px; }
+.units button:first-child { border-radius: 2px 0 0 2px; }
+.units button:last-child { border-radius: 0 2px 2px 0; margin-left: -1px; }
 .units button[aria-pressed="true"] { background: var(--hover); color: var(--text); font-weight: 600; }
 
 .message {
@@ -113,77 +198,96 @@ button {
 }
 .message.info { background: #eef4fb; color: #1c4f8f; }
 
-/* the panel's title, always shown */
-.intro h1 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
-.intro p { margin: 2px 0 0; color: var(--text); line-height: 1.4; }
+/* headline */
+.intro h1 { margin: 0; font: 400 28px/1.1 var(--serif); letter-spacing: -0.005em; }
+.intro p { margin: 6px 0 0; font: italic 14px/1.4 var(--serif); color: var(--muted); }
 
-/* first visit: how to start, in a card that stands out from the controls above it */
-.start {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px 14px;
-  line-height: 1.45;
-}
-.start h2 { font-size: 15px; margin: 0 0 6px; }
-.start ul { margin: 0; padding-left: 18px; }
-.start li { margin: 2px 0; }
+/* first load: the headline, the search box and one line */
+.start { line-height: 1.45; }
+.start .howto { margin: 0; color: var(--muted); }
 
-#query-summary h2 { font-size: 16px; margin: 0 0 2px; }
-#query-summary h2 .star { color: var(--query); }
-#query-summary .coords { color: var(--muted); font-size: 12px; }
+/* the query: its name set large, then where it is */
+#query-summary { border-top: 1px solid var(--rule); padding-top: 14px; }
+#query-summary h2 { margin: 0; font-size: 16px; font-weight: 400; }
+#query-summary h2 .star { color: var(--query); font-size: 18px; vertical-align: 6px; margin-right: 2px; }
+#query-summary h2 .primary { font: 400 30px/1.1 var(--serif); letter-spacing: -0.01em; }
+#query-summary h2 .secondary { display: block; margin-top: 4px; font: italic 15px/1.3 var(--serif); color: var(--muted); }
+#query-summary .coords { margin-top: 2px; color: var(--muted); font-size: 11px; letter-spacing: 0.02em; }
 
 .stats {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px 12px;
-  margin-top: 6px;
+  gap: 3px 14px;
+  margin-top: 10px;
   font-size: 12px;
   color: var(--muted);
 }
 .stats b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 
+/* section heads: small spaced capitals, as on a map's key */
+#query-summary h3.twins,
+#compare h4 {
+  margin: 18px 0 0;
+  font: 400 11px/1.3 var(--sans);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* the twins: a serif rank, the name on two lines, then the comparison */
 #results {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 40vh;   /* keep the comparison panel in view below */
+  max-height: 46vh;   /* keep the comparison panel in view below */
   overflow-y: auto;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--rule);
   flex-shrink: 0;
 }
+#results:empty { border: 0; }
 #results li {
   display: grid;
-  grid-template-columns: 24px 1fr auto;
+  grid-template-columns: 30px 1fr auto;
   gap: 0 8px;
   align-items: baseline;
-  padding: 6px 6px;
+  padding: 9px 6px 10px 2px;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
 }
 #results li.hover { background: var(--hover); }
 @media (hover: hover) { #results li:hover { background: var(--hover); } }
-#results li.selected { background: var(--selected); box-shadow: inset 3px 0 var(--rank-color); }
-#results .rank { font-weight: 700; color: var(--rank-color, var(--text)); font-variant-numeric: tabular-nums; }
-#results .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#results li.selected { background: var(--selected); box-shadow: inset 2px 0 var(--rank-color); }
+#results .rank { font: 400 20px/1 var(--serif); color: var(--rank-color, var(--text)); text-align: right; padding-right: 4px; }
+#results .label { overflow: hidden; text-overflow: ellipsis; }
+#results .label .primary {
+  display: block;
+  font: 400 15px/1.3 var(--serif);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 #results .flags { font-size: 12px; white-space: nowrap; }
 #results .meta { grid-column: 2 / -1; font-size: 12px; color: var(--muted); }
+#results .label .secondary { font-size: 12px; color: var(--muted); }
+#results .label .secondary + .meta::before { content: " · "; }
+#results .ruler { margin-top: 3px; font: 13px/1.35 var(--serif); color: var(--text); }
 #results .shift { color: var(--text); cursor: help; }
+#results .none { display: block; color: var(--muted); font-style: italic; }
 
-#compare {
-  border-top: 2px solid var(--border);
-  padding-top: 10px;
-}
-#compare h3 { font-size: 15px; margin: 0 0 4px; }
-#compare h4 { font-size: 12px; margin: 12px 0 2px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+/* the comparison */
+#compare { border-top: 1px solid var(--rule); padding-top: 16px; }
+/* the rank hangs in its own column, as in the list, so "2" and "64 mi" don't run together */
+#compare h3 { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; align-items: baseline; margin: 0 0 6px; font-size: 15px; font-weight: 400; }
+#compare h3 .rank { grid-row: span 2; font: 400 22px/1 var(--serif); color: var(--match); }
+#compare h3 .primary { font: 400 22px/1.2 var(--serif); }
+#compare h3 .secondary { grid-column: 2; margin-top: 3px; font: italic 14px/1.3 var(--serif); color: var(--muted); }
 #compare .note { font-size: 12px; color: var(--muted); margin: 2px 0; }
-#compare .verdict { font-size: 13px; margin: 6px 0 4px; }
+#compare .verdict { margin: 12px 0 10px; font: 400 15px/1.5 var(--serif); }
 .nowrap { white-space: nowrap; }
 .tip { cursor: help; text-decoration: underline dotted; text-underline-offset: 2px; }
 #compare figure { margin: 0; }
-#compare svg { overflow: visible; }
 
-.key { display: flex; gap: 14px; font-size: 12px; font-weight: 600; margin: 2px 0; }
+.key { display: flex; gap: 14px; font-size: 12px; font-weight: 500; margin: 2px 0; }
 .key .query { --c: var(--query); }
 .key .match { --c: var(--match); }
 .key span { color: var(--c); }
@@ -192,7 +296,7 @@ button {
   display: inline-block;
   width: 10px;
   height: 10px;
-  border-radius: 2px;
+  border-radius: 1px;
   margin-right: 5px;
   vertical-align: -1px;
   background: var(--c);
@@ -200,55 +304,92 @@ button {
 table.summary th.query { color: var(--query); }
 table.summary th.match { color: var(--match); }
 
-table.summary { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
-table.summary th, table.summary td { padding: 3px 4px; border-bottom: 1px solid var(--border); text-align: right; }
-table.summary th:first-child, table.summary td:first-child { text-align: left; color: var(--muted); font-weight: normal; }
-table.summary thead th { font-weight: 600; }
+table.summary { border-collapse: collapse; width: 100%; font: 400 13px/1.3 var(--serif); font-feature-settings: "lnum", "tnum"; }
+table.summary th, table.summary td { padding: 4px 4px; border-bottom: 1px solid var(--border); text-align: right; }
+table.summary th:first-child, table.summary td:first-child { text-align: left; color: var(--muted); font-weight: normal; font-family: var(--sans); font-size: 12px; }
+table.summary thead th { font-weight: 400; font-style: italic; border-bottom-color: var(--rule); }
+
+/* charts (Observable Plot): serif figures, warm ink for axes and grid, tooltips on paper */
+#compare svg {
+  overflow: visible;
+  font-family: var(--serif);
+  font-size: 10.5px;
+  font-feature-settings: "lnum", "tnum";
+  color: var(--muted);
+  --plot-background: var(--bg);
+}
+/* tooltips stay in the sans: Plot spaces their lines for it, and the serif's taller lines collide */
+#compare svg [aria-label="tip"] { font-family: var(--sans); }
+
+/* data credits, at the foot of the panel (pushed down when the panel is short) */
+.credits { margin-top: auto; padding-top: 12px; font-size: 11px; color: var(--muted); }
+.credits a { color: inherit; text-decoration-color: var(--border); text-underline-offset: 2px; }
+
+/* ------------------------------------------------------------------------ the map's furniture
+   in ink and the serif: the query star, the merged pins' tooltip, the heatmap legend and
+   MapLibre's own controls */
 
 .marker-query {
   font-size: 26px;
   line-height: 1;
-  color: var(--query);
-  text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff;
+  color: #2a2420;
+  text-shadow: 0 0 1px #f7f1e3, 0 0 2px #f7f1e3, 0 0 3px #f7f1e3, 0 0 4px #f7f1e3;
   cursor: default;
 }
 
 /* hover tooltip on a merged match pin: the ranks inside */
 .merged-tip .maplibregl-popup-content {
-  padding: 4px 8px;
-  font-size: 12px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgb(0 0 0 / 0.18);
+  padding: 3px 8px 2px;
+  font: 600 13px/1.3 var(--serif);
+  color: #2a2420;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  box-shadow: none;
 }
+.merged-tip .maplibregl-popup-tip { border-top-color: var(--rule); border-bottom-color: var(--rule); }
 
 .legend {
   position: absolute;
   left: 10px;
   bottom: 28px;
   z-index: 5;
-  background: rgb(255 255 255 / 0.92);
+  background: rgb(251 248 241 / 0.94);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 2px;
   padding: 6px 10px 4px;
+  font-family: var(--serif);
   font-size: 11px;
-  color: var(--muted);
+  color: #5a4a3c;
   width: 240px;
 }
-.legend .title { color: var(--text); margin-bottom: 4px; }
-.legend .bar { height: 10px; border-radius: 2px; }
-.legend .ticks { position: relative; height: 14px; }
+.legend .title {
+  margin-bottom: 5px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: #2a2420;
+}
+.legend .bar { height: 7px; box-shadow: inset 0 0 0 0.5px rgb(42 36 32 / 0.35); }
+.legend .ticks { position: relative; height: 14px; font-variant-numeric: oldstyle-nums; }
 .legend .ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; top: 2px; }
 .legend .ticks span:first-child { transform: none; }
 .legend .ticks span:last-child { transform: translateX(-100%); }
-#results:empty { border: 0; }
+.legend .excluded { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-style: italic; }
+.legend .excluded .swatch { width: 14px; height: 7px; flex: none; }
 
-/* data credits, at the foot of the panel (pushed down when the panel is short) */
-.credits { margin-top: auto; padding-top: 12px; font-size: 11px; color: var(--muted); }
-.credits a { color: inherit; }
-.legend .excluded { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
-.legend .excluded .swatch { width: 14px; height: 10px; border-radius: 2px; flex: none; }
+/* MapLibre's controls, quietened to match: paper buttons and a serif attribution. The selectors
+   match maplibre-gl.css's own, so that these, coming later, win. */
+.maplibregl-ctrl-group { background: var(--bg); border-radius: 2px; }
+.maplibregl-ctrl-group:not(:empty) { box-shadow: 0 0 0 1px var(--border); }
+.maplibregl-ctrl-group button + button { border-top-color: var(--border); }
+.maplibregl-ctrl-attrib.maplibregl-compact {
+  background: rgb(251 248 241 / 0.9);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px var(--border);
+}
+.maplibregl-ctrl.maplibregl-ctrl-attrib { font: italic 11px/1.5 var(--serif); color: var(--muted); }
+.maplibregl-ctrl-attrib a { color: inherit; }
 
 /* Phones: the map on top, the panel below it as its own scrolling sheet. */
 @media (max-width: 700px) {
@@ -258,15 +399,17 @@ table.summary thead th { font-weight: 600; }
     height: auto;
     min-height: 0;
     border-left: 0;
-    border-top: 1px solid var(--border);
-    padding: 10px 12px 24px;
+    border-top: 1px solid var(--rule);
+    padding: 14px 16px 24px;
   }
+  .intro h1 { font-size: 24px; }
   #search { font-size: 16px; } /* below 16px, iOS zooms the page in on focus */
   button { padding: 8px 12px; }
   .units button { padding: 6px 9px; font-size: 12px; }
+  #query-summary h2 .primary { font-size: 26px; }
   #results { max-height: none; overflow-y: visible; } /* one scroll: the panel's */
-  #results li { padding: 9px 6px; }
-  /* top right of the map: the legend is placed against the page, and the panel now fills its bottom */
+  #results li { padding: 10px 6px 11px 2px; }
+  /* top right of the map: the legend is placed against the page, and the panel fills its bottom */
   .legend { width: 196px; left: auto; right: 6px; top: 6px; bottom: auto; padding: 4px 8px 2px; font-size: 10px; }
-  .legend .bar { height: 8px; }
+  .legend .title { font-size: 9px; letter-spacing: 0.1em; white-space: nowrap; }
 }

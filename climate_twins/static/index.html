@@ -28,15 +28,12 @@
     </div>
 
     <section id="empty" class="start">
-      <h2>Pick a place to start</h2>
-      <ul>
-        <li><b>Search</b> for a city or town above</li>
-        <li>Use <b>My location</b></li>
-        <li><b>Tap or click</b> anywhere on land on the map</li>
-      </ul>
+      <p class="howto">Search for a city or town, use My location, or click anywhere on land.</p>
     </section>
 
-    <div class="controls">
+    <button id="adjust" class="adjust" type="button" aria-expanded="false" aria-controls="controls">Adjust</button>
+
+    <div id="controls" class="controls">
       <label title="Ignore matches this close to the query">
         <span>Exclude within <output id="exclude-out">1,500 km</output></span>
         <input id="exclude" type="range" min="0" max="3000" step="50" value="1500">

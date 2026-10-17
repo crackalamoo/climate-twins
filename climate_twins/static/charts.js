@@ -5,9 +5,11 @@ import { DAYS_PER_MONTH, PRECIP_STOPS, TEMP_STOPS, gradientStops } from "./ramps
 import { fmtAnnualPrecip, fmtPrecip, fmtTemp, fmtWind, precip, precipUnit, temp, tempUnit } from "./units.js";
 import { verdict } from "./verdict.js";
 
-// Colour says which place (the query's blue, the match's pin colour). The climate ramps (ramps.js)
-// are a faint wash behind each chart, so the plot area itself reads as cold/hot or dry/wet.
-const WASH_OPACITY = 0.22;
+// Colour says which place (the query's ink, the match's red). The climate ramps (ramps.js) are a
+// strip beside each chart's y axis, like a relief map's elevation key: charts have their own scales,
+// and the strip shows at a glance whether a range is cold or hot, dry or wet.
+const STRIP_PX = 6;
+const STRIP_GAP_PX = 2; // between the strip and the plot area
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const DEFAULT_WIDTH = 368; // when the panel has no layout yet
@@ -22,12 +24,10 @@ const FEATURE_NAMES = {
 };
 
 // How muggy the muggiest month feels, from its average dewpoint. Our own bands, a judgment call:
-// moment-to-moment scales like the US National Weather Service's (sticky from 55 °F) describe a
-// single hour, and a monthly average smooths the muggy spells away, so ours start higher. Most
-// people don't notice humidity below a dewpoint of about 60 °F. TerraClimate's vapor pressure
-// comes in 0.1 kPa steps (~1 °C of dewpoint here), so a band edge shouldn't sit where typical
-// cool-summer coasts land (San Francisco, London: 12-13 °C).
-// In °C: 60 °F = 15.6 °C, 65 °F = 18.3 °C, 70 °F = 21.1 °C.
+// hourly scales like the US National Weather Service's (sticky from 55 °F) run lower, but a monthly
+// average smooths muggy spells away. Most people don't notice humidity below about 60 °F. Dewpoints
+// come in ~1 °C steps (TerraClimate's 0.1 kPa), so no edge sits where cool-summer coasts land
+// (San Francisco, London: 12-13 °C). 60 / 65 / 70 °F = 15.6 / 18.3 / 21.1 °C.
 const DEWPOINT_COMFORT = [
   [21.1, "Oppressive"],
   [18.3, "Muggy"],
@@ -90,46 +90,46 @@ const xAxis = {
   tickFormat: (i) => MONTHS[i] ?? "",
   label: null,
 };
-let washId = 0;
+let stripId = 0;
 
 /**
- * A faint vertical wash of a climate ramp behind the plot area: `toMetric` maps the y scale's display
- * units to the ramp's units. Returns the frame mark to put first and a function to add its gradient.
+ * Add a climate ramp's strip to `chart`, just left of the plot area, in place of the y axis's tick
+ * marks: `toMetric` maps the y scale's display units to the ramp's units.
  */
-function wash(stops, toMetric) {
-  const id = `wash-${washId++}`;
-  const mark = Plot.frame({ fill: `url(#${id})`, fillOpacity: WASH_OPACITY });
-  const addTo = (chart) => {
-    const y = chart.scale("y");
-    const [lo, hi] = y.domain;
-    const stopsSvg = gradientStops(stops, toMetric(hi), toMetric(lo))
-      .map(([offset, color]) => `<stop offset="${offset}" stop-color="${color}"/>`)
-      .join("");
-    const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
-    defs.innerHTML = `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="0" x2="0" y1="${y.apply(hi)}" y2="${y.apply(lo)}">${stopsSvg}</linearGradient>`;
-    (chart.tagName === "svg" ? chart : chart.querySelector("svg")).prepend(defs);
-    return chart;
-  };
-  return { mark, addTo };
+function withStrip(chart, stops, toMetric) {
+  const id = `strip-${stripId++}`;
+  const y = chart.scale("y");
+  const [lo, hi] = y.domain;
+  const [top, bottom] = [y.apply(hi), y.apply(lo)];
+  const left = chart.scale("x").range[0] - STRIP_GAP_PX - STRIP_PX;
+  const stopsSvg = gradientStops(stops, toMetric(hi), toMetric(lo))
+    .map(([offset, color]) => `<stop offset="${offset}" stop-color="${color}"/>`)
+    .join("");
+  const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  g.innerHTML = `<defs><linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="0" x2="0" y1="${top}" y2="${bottom}">${stopsSvg}</linearGradient></defs>`
+    + `<rect x="${left}" y="${top}" width="${STRIP_PX}" height="${bottom - top}" fill="url(#${id})"/>`;
+  (chart.tagName === "svg" ? chart : chart.querySelector("svg")).append(g);
+  return chart;
 }
+
+// The y axis for a chart with a strip: no tick marks, labels clear of the strip.
+const stripAxis = { tickSize: 0, tickPadding: STRIP_GAP_PX + STRIP_PX + 4 };
 
 const toCelsius = (v) => (tempUnit() === "°F" ? ((v - 32) * 5) / 9 : v);
 const toMmPerDay = (v) => (precipUnit() === "in" ? v * 25.4 : v) / DAYS_PER_MONTH;
 
-/** Daily high and low for both places, over a wash of the temperature ramp. Each place's high is
+/** Daily high and low for both places, beside a strip of the temperature ramp. Each place's high is
  * the upper of its two lines, so they share one style. */
 function temperatureChart(rows, color, names, width) {
-  const bg = wash(TEMP_STOPS, toCelsius);
   const line = { x: "i", stroke: "who", strokeWidth: 2, curve: "monotone-x" };
-  return bg.addTo(Plot.plot({
+  return withStrip(Plot.plot({
     width,
     height: 170,
     marginLeft: 36,
     x: xAxis,
-    y: { label: tempUnit(), grid: true, nice: true },
+    y: { label: tempUnit(), grid: true, nice: true, ...stripAxis },
     color,
     marks: [
-      bg.mark,
       Plot.lineY(rows, { ...line, y: "tmax" }),
       Plot.lineY(rows, { ...line, y: "tmin" }),
       Plot.tip(rows, Plot.pointerX({
@@ -139,22 +139,20 @@ function temperatureChart(rows, color, names, width) {
         title: (d) => `${names[d.who]} (${d.month})\nhigh ${d.tmax.toFixed(1)} ${tempUnit()}\nlow ${d.tmin.toFixed(1)} ${tempUnit()}`,
       })),
     ],
-  }));
+  }), TEMP_STOPS, toCelsius);
 }
 
-/** Monthly totals side by side (query left, match right), over a wash of the dry-to-wet ramp. */
+/** Monthly totals side by side (query left, match right), beside a strip of the dry-to-wet ramp. */
 function precipitationChart(rows, color, names, width) {
-  const bg = wash(PRECIP_STOPS, toMmPerDay);
   const bar = 0.38; // bar width in months; query left of center, match right
-  return bg.addTo(Plot.plot({
+  return withStrip(Plot.plot({
     width,
     height: 140,
     marginLeft: 36,
     x: xAxis,
-    y: { label: precipUnit(), grid: true },
+    y: { label: precipUnit(), grid: true, ...stripAxis },
     color,
     marks: [
-      bg.mark,
       Plot.rectY(rows, {
         x1: (d) => d.i + (d.who === "Query" ? -bar : 0.02),
         x2: (d) => d.i + (d.who === "Query" ? -0.02 : bar),
@@ -165,10 +163,10 @@ function precipitationChart(rows, color, names, width) {
       }),
       Plot.ruleY([0]),
     ],
-  }));
+  }), PRECIP_STOPS, toMmPerDay);
 }
 
-function differenceChart(share, width) {
+function differenceChart(share, width, { bar, ink }) {
   const rows = Object.entries(share)
     .map(([key, value]) => ({ name: FEATURE_NAMES[key] ?? key, value }))
     .sort((a, b) => b.value - a.value);
@@ -182,8 +180,8 @@ function differenceChart(share, width) {
     x: { axis: null, domain: [0, 1] },
     y: { label: null, domain: rows.map((d) => d.name), tickSize: 0 },
     marks: [
-      Plot.barX(rows, { x: "value", y: "name", fill: "#8f8d85", insetTop: 4, insetBottom: 4 }),
-      Plot.text(rows, { x: "value", y: "name", text: (d) => `${Math.round(d.value * 100)}%`, dx: 4, textAnchor: "start", fill: "#1f1f1d" }),
+      Plot.barX(rows, { x: "value", y: "name", fill: bar, insetTop: 4, insetBottom: 4 }),
+      Plot.text(rows, { x: "value", y: "name", text: (d) => `${Math.round(d.value * 100)}%`, dx: 4, textAnchor: "start", fill: ink }),
     ],
   });
 }
@@ -213,21 +211,22 @@ function seriesNames(labels) {
 /**
  * Render the comparison into `el`.
  * query: the /similar `query` object (with monthly); match: one of its `matches` (with monthly).
- * labels: {query, match} full place labels, {queryName, matchName} short names (may be null), and
- * verdictName: what the verdict is "Compared to" (the query's name, or "your spot").
+ * labels: query, the query's full place label; {queryName, matchName} short names (may be null);
+ * verdictName: what the verdict is "Compared to" (the query's name, or "your spot"); and matchLines:
+ * the match's label as [primary, secondary-or-null], for the two-line heading.
  * `el` must be visible: the charts take its width.
  */
 export function renderComparison(el, query, match, labels) {
   const shift = match.seasons_shifted_6_months ? 6 : 0;
   const rows = monthlyRows(query.monthly, match.monthly, shift);
   const style = getComputedStyle(el);
-  const [queryColor, matchColor] = ["--query", "--match"].map((v) => style.getPropertyValue(v).trim());
+  const [queryColor, matchColor, bar, ink] = ["--query", "--match", "--diff-bar", "--text"].map((v) => style.getPropertyValue(v).trim());
   const color = { domain: ["Query", "Match"], range: [queryColor, matchColor] };
   const names = seriesNames(labels);
 
   const said = verdict(query, match);
   el.innerHTML = `
-    <h3>#${match.rank} ${escapeHtml(labels.match)}</h3>
+    ${headingLines(match.rank, labels.matchLines)}
     <p class="note">vs ${escapeHtml(labels.query)}</p>
     ${said ? `<p class="verdict" title="The largest differences, sized by how much each adds to the climate difference.">Compared to ${escapeHtml(labels.verdictName)}: ${escapeHtml(said[0].toLowerCase() + said.slice(1))}</p>` : ""}
     ${keyHtml(names)}
@@ -237,11 +236,16 @@ export function renderComparison(el, query, match, labels) {
     <h4>Summary</h4>${summaryTable(query.summary, match.summary, names)}
     <h4>What makes up the difference</h4><figure class="diff"></figure>
   `;
-  // Charts fill the panel's width (a phone's, or the desktop sidebar's); `el` must be laid out.
   const width = Math.floor(el.clientWidth) || DEFAULT_WIDTH;
   el.querySelector("figure.temp").append(temperatureChart(rows, color, names, width));
   el.querySelector("figure.ppt").append(precipitationChart(rows, color, names, width));
-  el.querySelector("figure.diff").append(differenceChart(match.difference_share, width));
+  el.querySelector("figure.diff").append(differenceChart(match.difference_share, width, { bar, ink }));
+}
+
+/** The match's heading on two lines: its rank and name, then where it is. */
+function headingLines(rank, [primary, secondary]) {
+  return `<h3><span class="rank">${rank}</span> <span class="primary">${escapeHtml(primary)}</span>${
+    secondary ? `<span class="secondary">${escapeHtml(secondary)}</span>` : ""}</h3>`;
 }
 
 export function escapeHtml(s) {

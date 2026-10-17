@@ -1,6 +1,6 @@
 // Colour ramps for climate values, shared with crackalamoo/building-earth (frontend/src/lib/globe/
 // colormap.ts and precipitationColormap.ts) so the two projects read alike. Both interpolate in RGB.
-// Here they are background washes behind the comparison charts.
+// Here they are the strips beside the comparison charts' y axes.
 
 /** Temperature (°C) stops. The step at 0 °C is deliberate: freezing reads as a visible break. */
 export const TEMP_STOPS = [

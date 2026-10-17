@@ -1,8 +1,6 @@
 // A one-line verdict on how a match's climate differs from the query's. Pure functions of the API's
-// metric data: callers add place names and display units. (How a match compares with well-known
-// cities near the query is decided by the server: /similar's `ruler_comparison`.)
-
-// -------------------------------------------------------------------- verdict
+// metric data: callers add place names and display units. (Comparisons with well-known cities near
+// the query come from the server: /similar's `ruler_comparison`.)
 
 // How big a gap is, from its part of the squared climate difference (`difference_d2`: the weighted,
 // standardized units the search ranks by), so a word never outsizes what the search counts.
@@ -85,10 +83,10 @@ function seasons(q) {
 }
 
 /**
- * A pattern of two parts (summer then winter, days then nights, always in that order) as a phrase.
- * Opposite ways: both, when the smaller is at least PART_FRACTION of the larger ("slightly wetter
- * summers, drier winters"; "much" goes on the larger part: "drier summers, much wetter winters"). The same way: the overall word,
- * and which part most ("warmer, especially at night"). parts: [{v, up, down, when}].
+ * A pattern of two parts (summer then winter, days then nights, in that order) as a phrase.
+ * Opposite ways: both, when the smaller is at least PART_FRACTION of the larger ("drier summers,
+ * much wetter winters"). The same way: the overall word, and which part most ("warmer, especially
+ * at night"). parts: [{v, up, down, when}].
  */
 function twoParts(parts, words, size) {
   const larger = Math.abs(parts[1].v) > Math.abs(parts[0].v) ? 1 : 0;
@@ -172,7 +170,6 @@ function pattern(f, s) {
 }
 
 const sizeWord = (d2) => SIZE_WORDS.find(([min]) => d2 >= min)?.[1] ?? "slightly";
-
 
 /**
  * A terse verdict on how the match's climate differs from the query's, e.g. "Nearly identical

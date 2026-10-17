@@ -2,21 +2,17 @@
 
 import { Map, Marker, NavigationControl, Popup } from "https://cdn.jsdelivr.net/npm/maplibre-gl@6.12.0/dist/maplibre-gl.mjs";
 
-const STYLE = "https://tiles.openfreemap.org/styles/positron";
+// A printed-atlas basemap, set in Libre Caslon, on OpenFreeMap's vector tiles.
+const STYLE = "atlas/style.json";
 const HEATMAP = "heatmap";
 const MATCHES = "matches";
 const PINS = "match-pins";
 const HALO = "match-halo";
-const FONT = ["Noto Sans Bold"]; // served by the style's glyph server
-const SELECTED_RING = "#0b0b0b";
+const FONT = ["Libre Caslon Text Bold"]; // from the style's glyphs
 const LABELS = "match-labels";
 
-/**
- * Pin colours. A match's colour is the heatmap's colour at its similarity (top % of land), so a pin
- * reads on the same scale as the land around it. #1-5 are filled with it; #6 onwards are white
- * discs ringed (and numbered) in it, so the lesser matches recede.
- */
-const FILLED_RANKS = 5;
+// A match's colour is the heatmap's at its similarity (top % of land), so its rank in the result list
+// reads on the same scale as the map.
 const FALLBACK_INK = "#540d6e"; // the heatmap's strongest stop, if the legend didn't load
 
 /** The heatmap's colour (opaque) at `topPct`, interpolated in log10(top %) like tiles.py. */
@@ -31,13 +27,23 @@ function heatColor(topPct, stops) {
   return `#${rgb.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
 
+/** rank -> identifying colour for this result set (pins and the sidebar's rank numbers). */
+export function matchColors(matches, stops) {
+  const color = (m) => (stops ? heatColor(100 - m.more_similar_than_pct_of_land, stops) : FALLBACK_INK);
+  return new globalThis.Map(matches.map((m) => [m.rank, color(m)]));
+}
+
+// #1-5 are discs of their rank colour ringed in paper; #6 onwards paper discs ringed in it, so the
+// lesser matches recede.
+const FILLED_RANKS = 5;
+const INK = "#2a2420";
+const PAPER = "#f7f1e3";
+
 function luminance(hex) {
   const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
   const [r, g, b] = c.map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
-
-const INK = "#1f1f1d";
 
 /** WCAG contrast ratio between two #rrggbb colours. */
 function contrast(a, b) {
@@ -45,17 +51,11 @@ function contrast(a, b) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-/** A filled pin's number: white where legible (>= 4.5:1). A white pin's number: its ring colour where legible. */
+/** A filled pin's number: paper where legible (>= 4.5:1). A paper pin's number: its ring colour where legible. Else ink. */
 function numberColor(color, filled) {
-  const legible = contrast(color, "#ffffff") >= 4.5;
-  if (filled) return legible ? "#fff" : INK;
+  const legible = contrast(color, PAPER) >= 4.5;
+  if (filled) return legible ? PAPER : INK;
   return legible ? color : INK;
-}
-
-/** rank -> identifying colour for this result set (also used by the sidebar's rank numbers). */
-export function matchColors(matches, stops) {
-  const color = (m) => (stops ? heatColor(100 - m.more_similar_than_pct_of_land, stops) : FALLBACK_INK);
-  return new globalThis.Map(matches.map((m) => [m.rank, color(m)]));
 }
 
 // A pin's rank (a merged pin is its best match's).
@@ -121,7 +121,13 @@ function pinFeature({ lead, members }) {
     type: "Feature",
     geometry: { type: "Point", coordinates: [lead.lon, lead.lat] },
     // ",1,,8,,13," so that `in ",8,"` finds a match whether it is a pin's lead or merged into it
-    properties: { rank: lead.rank, ranks: members.map((m) => `,${m.rank},`).join(""), merged: members.length > 1 },
+    properties: {
+      rank: lead.rank,
+      ranks: members.map((m) => `,${m.rank},`).join(""),
+      merged: members.length > 1,
+      color: lead.color,
+      number: numberColor(lead.color, lead.rank <= FILLED_RANKS),
+    },
   };
 }
 
@@ -131,16 +137,16 @@ function pinRadius(marked) {
   return ["interpolate", ["linear"], ["zoom"], 1, r(10), 6, r(12)];
 }
 
-/** A soft glow around a `marked` (hovered or selected) pin. */
+/** A paper ring around a `marked` (hovered or selected) pin, edged in ink (more firmly when selected). */
 function haloRadius() {
-  return ["interpolate", ["linear"], ["zoom"], 1, 19, 6, 21];
+  return ["interpolate", ["linear"], ["zoom"], 1, 16, 6, 18];
 }
 
 function haloOpacity(marked) {
-  return ["case", marked, 0.4, 0];
+  return ["case", marked, 0.92, 0];
 }
 
-/** Pins: halo (highlight glow), disc and rank number. */
+/** Pins: halo (highlight ring), disc and rank number. */
 function matchLayers() {
   return [
     {
@@ -148,7 +154,13 @@ function matchLayers() {
       type: "circle",
       source: MATCHES,
       layout: { "circle-sort-key": SORT },
-      paint: { "circle-radius": haloRadius(), "circle-color": FALLBACK_INK, "circle-opacity": haloOpacity(false) },
+      paint: {
+        "circle-radius": haloRadius(),
+        "circle-color": PAPER,
+        "circle-opacity": haloOpacity(false),
+        "circle-stroke-color": INK,
+        "circle-stroke-opacity": 0,
+      },
     },
     {
       id: PINS,
@@ -157,9 +169,9 @@ function matchLayers() {
       layout: { "circle-sort-key": SORT },
       paint: {
         "circle-radius": pinRadius(false),
-        "circle-color": FALLBACK_INK,
-        "circle-stroke-color": "#fff",
-        "circle-stroke-width": 2,
+        "circle-color": ["case", FILLED, ["get", "color"], PAPER],
+        "circle-stroke-color": ["case", FILLED, PAPER, ["get", "color"]],
+        "circle-stroke-width": 1.5,
       },
     },
     {
@@ -169,12 +181,12 @@ function matchLayers() {
       layout: {
         "text-field": ["to-string", RANK],
         "text-font": FONT,
-        "text-size": ["interpolate", ["linear"], ["zoom"], 1, 11, 6, 13],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 1, 12, 6, 14],
         "text-allow-overlap": true,
         "text-padding": 9, // keep basemap labels clear of the pin
         "symbol-sort-key": SORT,
       },
-      paint: { "text-color": "#fff" },
+      paint: { "text-color": ["get", "number"] },
     },
   ];
 }
@@ -195,9 +207,10 @@ export class ClimateMap {
     this.queryMarker = null;
     this.queryPoint = null; // {lat, lon} of the star
     this.overlays = overlays;
-    this.marks ={ hover: null, selected: null }; // rank highlighted by markMatch
+    this.marks = { hover: null, selected: null }; // rank highlighted by markMatch
     this.hoverKey = null; // pin under the mouse
     this.tip = new Popup({ closeButton: false, closeOnClick: false, offset: 16, className: "merged-tip" });
+    this.map.setMissingStyleImageResolver((id) => addAtlasIcon(this.map, id));
   }
 
   /** Replace the heatmap with tiles for a new query (a fresh source so all tiles refetch). */
@@ -230,7 +243,10 @@ export class ClimateMap {
     this.queryPoint = { lat, lon };
   }
 
-  /** Show the matches as numbered pins, merged into the best-ranked one where they would overlap. */
+  /**
+   * Show the matches as numbered pins in their `colors` (rank -> #rrggbb, from matchColors), merged
+   * into the best-ranked one where they would overlap.
+   */
   async setMatches(matches, colors) {
     // New matches: the old highlights name ranks of the old ones. Cleared before the await, so a
     // caller can mark one of the new matches straight after (the units toggle keeps its selection).
@@ -238,11 +254,17 @@ export class ClimateMap {
     await this.loaded;
     this.points = [...matches]
       .sort((a, b) => a.rank - b.rank)
-      .map((m) => ({ rank: m.rank, lon: m.cell.lon, lat: m.cell.lat, xy: mercator(m.cell.lon, m.cell.lat) }));
+      .map((m) => ({
+        rank: m.rank,
+        color: colors.get(m.rank) ?? FALLBACK_INK,
+        lon: m.cell.lon,
+        lat: m.cell.lat,
+        xy: mercator(m.cell.lon, m.cell.lat),
+      }));
     this.pinsKey = null;
     if (!this.map.getSource(MATCHES)) this.addMatchLayers();
     this.updatePins();
-    this.paintColors(colors);
+    this.paintMarks();
     this.hideTip();
   }
 
@@ -254,17 +276,6 @@ export class ClimateMap {
     if (key === this.pinsKey) return;
     this.pinsKey = key;
     this.map.getSource(MATCHES).setData({ type: "FeatureCollection", features: this.pins.map(pinFeature) });
-  }
-
-  /** Colour pins from `colors` (rank -> colour, from matchColors); a merged pin takes its best rank's. */
-  paintColors(colors) {
-    const byRank = (f) =>
-      colors.size ? ["match", RANK, ...[...colors].flatMap(([rank, c]) => [rank, f(rank, c)]), FALLBACK_INK] : FALLBACK_INK;
-    this.ink = byRank((rank, c) => c);
-    this.map.setPaintProperty(HALO, "circle-color", this.ink);
-    this.map.setPaintProperty(PINS, "circle-color", ["case", FILLED, this.ink, "#fff"]);
-    this.map.setPaintProperty(LABELS, "text-color", byRank((rank, c) => numberColor(c, rank <= FILLED_RANKS)));
-    this.paintMarks();
   }
 
   addMatchLayers() {
@@ -287,8 +298,8 @@ export class ClimateMap {
     const marked = ["any", has(hover), has(selected)];
     this.map.setPaintProperty(PINS, "circle-radius", pinRadius(marked));
     this.map.setPaintProperty(HALO, "circle-opacity", haloOpacity(marked));
-    this.map.setPaintProperty(PINS, "circle-stroke-color", ["case", has(selected), SELECTED_RING, FILLED, "#fff", this.ink ?? FALLBACK_INK]);
-    this.map.setPaintProperty(PINS, "circle-stroke-width", ["case", has(selected), 2.5, 2]);
+    this.map.setPaintProperty(HALO, "circle-stroke-opacity", ["case", marked, 1, 0]);
+    this.map.setPaintProperty(HALO, "circle-stroke-width", ["case", has(selected), 1.5, 0.75]);
   }
 
   /** The topmost (best-ranked) pin under a screen point, if any. */
@@ -406,6 +417,31 @@ export class ClimateMap {
   }
 }
 
+/**
+ * The basemap's settlement symbols, drawn on demand (it has no sprite): "atlas-dot", a city's ink
+ * dot, and "atlas-capital", a capital's ringed dot. Both are edged in paper to stand off the heatmap.
+ */
+function addAtlasIcon(map, id) {
+  const r = { "atlas-dot": 3.5, "atlas-capital": 5 }[id]; // outer radius, CSS px
+  if (!r || map.hasImage(id)) return;
+  const ratio = 2;
+  const ctx = Object.assign(document.createElement("canvas"), { width: 2 * r * ratio, height: 2 * r * ratio }).getContext("2d");
+  ctx.scale(ratio, ratio);
+  const disc = (radius, color) => {
+    ctx.beginPath();
+    ctx.arc(r, r, radius, 0, 2 * Math.PI);
+    ctx.fillStyle = color;
+    ctx.fill();
+  };
+  disc(r, PAPER);
+  disc(r - 1, INK);
+  if (id === "atlas-capital") {
+    disc(r - 2, PAPER);
+    disc(r - 3, INK);
+  }
+  map.addImage(id, ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height), { pixelRatio: ratio });
+}
+
 /** Render the heatmap legend from /heatmap/legend stops into `el`; the caller shows it once there is a heatmap. */
 export function renderLegend(el, stops, excluded) {
   stops = [...stops].sort((a, b) => b.top_pct - a.top_pct); // 5% (faint) -> 0.01% (strong)
@@ -414,8 +450,9 @@ export function renderLegend(el, stops, excluded) {
   const lo = Math.log(stops[0].top_pct), hi = Math.log(stops.at(-1).top_pct);
   const pos = (i) => (100 * (lo - Math.log(stops[i].top_pct))) / (lo - hi);
   const gradient = stops.map((s, i) => `${rgba(s.rgba)} ${pos(i)}%`).join(", ");
+  // A short title: the exclusion radius has its own line.
   el.innerHTML = `
-    <div class="title">Most similar land (top % of land beyond the exclusion radius)</div>
+    <div class="title">Most similar · top % of land</div>
     <div class="bar" style="background: linear-gradient(to right, ${gradient})"></div>
     <div class="ticks">${stops.map((s, i) => `<span style="left:${pos(i)}%">${s.top_pct}%</span>`).join("")}</div>
     ${excluded ? `<div class="excluded"><span class="swatch" style="background:${rgba(excluded.rgba)}"></span>${excluded.label}</div>` : ""}
