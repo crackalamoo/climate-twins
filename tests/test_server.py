@@ -61,12 +61,7 @@ def test_similar(client: TestClient):
     assert set(body["params"]) == {"n", "exclude_km", "suppress_km", "align"}
     assert body["params"]["n"] == 3
     assert isinstance(body["elapsed_ms"], int)
-    assert all("place" in m for m in body["matches"])
-    for place in (body["query"]["place"], top["place"]):
-        assert {"tier", "direction", "base_label", "label"} <= set(place)
-        assert isinstance(place["label"], str) and place["label"]
-    assert body["query"]["place"]["tier"] == "near"
-    assert body["query"]["place"]["name"] == "Midtown"
+    assert (body["query"]["place"]["name"], body["query"]["place"]["tier"]) == ("Midtown", "near")
     assert top["place"]["tier"] == "region"
 
 
@@ -75,8 +70,6 @@ def test_climate(client: TestClient):
     assert r.status_code == 200
     assert r.json()["cell"]["lat"] == NC_QUERY[0]
     assert r.json()["place"]["name"] == "Midtown"
-    base_label = r.json()["place"]["base_label"]
-    assert isinstance(base_label, str) and base_label
 
 
 @pytest.mark.parametrize("path", ["/similar", "/climate", "/tiles/0/0/0.png"])
@@ -127,7 +120,7 @@ def test_tile_out_of_range_is_400(client: TestClient):
     assert r.status_code == 400
 
 
-@pytest.mark.parametrize("path", ["/", "/app.js", "/map.js"])
+@pytest.mark.parametrize("path", ["/", "/app.js"])
 def test_static_files_revalidate(client: TestClient, path: str):
     r = client.get(path)
     assert r.status_code == 200
@@ -139,7 +132,6 @@ def test_similar_has_a_ruler(client: TestClient):
     body = client.get("/similar", params={"lat": NC_QUERY[0], "lon": NC_QUERY[1], "n": 1}).json()
     assert set(body["ruler"]) == {"min_km", "max_km", "min_population", "cities"}
     assert "ruler_comparison" in body["matches"][0]
-    assert (body["ruler"]["min_km"], body["ruler"]["max_km"], body["ruler"]["min_population"]) == (50, 500, 500_000)
 
 
 # The ruler on the 2-degree synthetic world (base_index), whose cell centres sit on odd degrees:

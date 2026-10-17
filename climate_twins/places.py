@@ -42,31 +42,29 @@ CITY_DISTANCE_OFFSET_KM = 15.0
 CITY_DISTANCE_POWER = 3
 NEAR_KM = 25.0  # closer than this to the city, the label is "near <city>"
 # Search also finds cities that can label (CITY_MIN_POPULATION+) by all their GeoNames alternate
-# names: other languages, former names, abbreviations ("NYC") and airport codes ("PDX").
+# names: other languages, former names, abbreviations ("NYC"), airport codes ("PDX").
 SPELLING_SIMILARITY = 0.75  # an alternate name this close to the name is another spelling of it
 # Search ranks by population, but a place whose own name is the whole name typed ranks as if this many
 # times as populous: a subjective choice. Big enough that "Porto" puts Porto (250k) above Porto Alegre
 # (1.4M); small enough that while typing "Par", Paris (2.1M) is above Par, England (9k).
 WHOLE_NAME_BOOST = 10
-# A match by alternate name, whole or in part, ranks as if this many times less populous: also a
-# subjective choice. GeoNames gives cities other places' names and many languages' forms of their own:
-# Bordeaux is also "Porto", Jerusalem "Salem", Perth "Partha" (so it would beat Paris at "Par"). Small
-# enough that Mexico City (12M) by "Mexico" is above every place called Mexico.
+# A match by alternate name ranks as if this many times less populous: also subjective. GeoNames
+# gives cities other places' names (Bordeaux is also "Porto", Perth "Partha", which would beat Paris
+# at "Par"). Small enough that Mexico City (12M) by "Mexico" is above every place called Mexico.
 ALIAS_DISCOUNT = 10
 # Alternate names match only once the name typed is this long: two letters are too early to guess one,
 # and GeoNames has junk short ones (Chongqing as "Pa").
 ALIAS_MIN_CHARS = 3
 # A place whose region or country the qualifier names whole (all of its name, or a code) ranks as if
-# this many times as populous as one it names only in part: also a subjective choice, set like
-# WHOLE_NAME_BOOST. Big enough that "Cambridge, MA" puts Cambridge, Massachusetts (110k) above
-# Cambridge, Maryland (13k), which "MA" only starts; small enough that a code doesn't beat someone
-# still typing a region's name: "Santiago, Sa" is Santiago, Chile (Santiago Metropolitan), not
-# Santiago Sacatepéquez, Guatemala (code SA).
+# this many times as populous as one it names only in part: also subjective. Big enough that
+# "Cambridge, MA" puts Cambridge, Massachusetts (110k) above Cambridge, Maryland (13k); small enough
+# that a code doesn't beat a region name still being typed: "Santiago, Sa" is Santiago, Chile
+# (Santiago Metropolitan), not Santiago Sacatepéquez, Guatemala (code SA). Hence a boost rather than
+# putting whole qualifiers first outright.
 WHOLE_QUALIFIER_BOOST = 10
-# A qualifier typed as capitals of this many letters is a code, not the start of a name: "Valencia,
-# CA" is California (or Canada), not Carabobo, which would otherwise win on population (Valencia,
-# Venezuela is 11x Valencia, California), unless it names nothing whole. Lowercase "ca" could be
-# either. One letter is too early to tell.
+# A qualifier typed as capitals of this many letters is a code, not the start of a name (unless it
+# names nothing whole): "Valencia, CA" is California or Canada, not Carabobo, which would win on
+# population. Lowercase "ca" could be either; one letter is too early to tell.
 CODE_LETTERS = (2, 3)
 # Weight of a match by alternate name, by a place's own name in part, and by its whole own name.
 _MATCH_WEIGHTS = np.array([1, ALIAS_DISCOUNT, ALIAS_DISCOUNT * WHOLE_NAME_BOOST], dtype=np.int64)
@@ -467,7 +465,7 @@ class Places:
 
     def _polygon_areas(self) -> list[tuple[str, str] | None]:
         """Each boundary polygon's (country code, GeoNames admin1 region or ""), or None if its
-        country is unknown. Only names two sources agree on, never a majority:
+        country is unknown. Only names two sources agree on, never a majority of towns:
         - Country: the one all of its GeoNames towns are filed under (POLYGON_MIN_TOWNS+ of
           them), so places are named as GeoNames names them (Western Sahara, French Guiana);
           else Natural Earth's.
@@ -475,9 +473,8 @@ class Places:
           (a stale code names some other region: Svalbard's NO.21 is now Trøndelag). Else the
           one all of its towns in that country are in (POLYGON_MIN_TOWNS+; towns GeoNames gives
           no region don't count); else "" (labels show the country).
-        Never a majority of towns: a region is the polygon's own or none. Natural Earth predates
-        some reforms, so a few areas get their former region (Papua for what's now Central
-        Papua, Almaty Region for Zhetysu), never one they weren't in."""
+        Natural Earth predates some reforms, so a few areas get their former region (Papua for
+        what's now Central Papua), never one they weren't in."""
         b = self.boundaries
         polygon = b.polygons_containing(self.lat, self.lon)
         towns: dict[int, list[int]] = {}
@@ -498,24 +495,19 @@ class Places:
 
     def _region_abbreviations(self) -> dict[str, str]:
         """GeoNames admin1 code -> the abbreviation people write for that region, from the ISO 3166-2
-        codes of its boundary polygons: "CA.02" -> "BC" (CA-BC), "AU.02" -> "NSW". GeoNames' own
-        codes for many countries' regions are only numbers, so without these "Vancouver, BC" finds
-        nothing. Not Natural Earth's `postal` field: it has NSW as "NS" and Queensland as "QL".
+        codes of its boundary polygons: "CA.02" -> "BC" (CA-BC). GeoNames' own codes for many
+        countries are only numbers, so without these "Vancouver, BC" finds nothing. Not Natural
+        Earth's `postal` field: it has NSW as "NS" and Queensland as "QL".
         A code is used only where it's surely that region's:
         - the ISO code is in the GeoNames code's country, and some polygon with that GeoNames code is
-          named as GeoNames names the region (_admin1_named: a stale code names some other region);
+          named as GeoNames names the region (_admin1_named);
         - every polygon with that GeoNames code has the same ISO code (UK and Italian polygons are
           councils and provinces, many to one GeoNames region, each with its own ISO code);
-        - it has 2+ characters, one a letter: one letter would count as a whole region while
-          someone is still typing a name ("Springfield, I"), and nobody writes the numeric ones
-          ("JP-13"), which would also clash with GeoNames' own numeric codes.
-        One abbreviation for several regions of a country (Lima Province and Lima region are both
-        PE-LIM) names each of them, as codes do (_Qualifiers).
-        None for REGIONLESS_COUNTRIES, whose regions labels hide as obscure: nobody types their
-        codes (Guatemala's "SA", Colombia's "CAL"), which would only match someone partway through
-        another region's name ("Santiago, Sa"). The same set rather than another hand-made list.
-        Their region names and GeoNames' own codes still match: search results show the region,
-        and a result's label must find it again."""
+        - it has 2+ characters, one a letter: one letter would match while a name is still being
+          typed ("Springfield, I"), and numeric ones ("JP-13") clash with GeoNames' numeric codes.
+        None for REGIONLESS_COUNTRIES: nobody types their codes (Guatemala's "SA"), which would only
+        match a region name still being typed ("Santiago, Sa"). Their region names and GeoNames'
+        own codes still match."""
         b = self.boundaries
         found: dict[str, set[str]] = {}
         trusted: set[str] = set()
@@ -558,7 +550,7 @@ class Places:
         return {"admin1": shown or None, "country": self.country_by_code.get(cc) or None}
 
     def label_for(self, lat: float, lon: float) -> dict | None:
-        """The Place label (see docs/ui-api.md) for a point, or None if nothing is near."""
+        """The Place label (see docs/api.md) for a point, or None if nothing is near."""
         here = self.locate(lat, lon)
         i = self.city_for(lat, lon)
         if i is None:
@@ -579,19 +571,17 @@ class Places:
         else:
             direction = compass(lat, lon, self.lat[i], self.lon[i])
             tier, label = "offset", f"{km:.0f} km {direction} of {base}{where}"
-        # tier/direction/km/base_label/in_area let clients rebuild `label` in other units. `area` is
-        # where the point itself is, which can differ from the city's region or country.
+        # tier/direction/km/base_label/in_area let clients rebuild `label` in other units.
         return {**place, "km": round(km, 1), "tier": tier, "direction": direction, "base_label": base,
                 "in_area": in_area, "label": label, "area": area}
 
     def _in_area(self, i: int, here: tuple[str, str] | None, area: dict | None) -> str | None:
         """Where the point is, as label text ("Castille and León, Spain"; "France" where its region
         is unknown or not shown), when city i's label would otherwise name a region or country the
-        point isn't in; else None. Only what the label claims can conflict: a region it hides
-        (regionless, generic, or repeating the city) can't, so Santiago's hidden region conflicts
-        only with a point region that labels would show (O'Higgins). Unknown is never a conflict:
-        no area (open sea, no boundary data), or either region unknown in the same country, leaves
-        the label as it was. Stale over wrong; never guess."""
+        point isn't in; else None. Only what the label claims can conflict: a region it hides can't,
+        so Santiago's hidden region conflicts only with a point region labels would show (O'Higgins).
+        Unknown is never a conflict (no area, or either region unknown in the same country): stale
+        over wrong."""
         if here is None or area is None:
             return None
         cc, admin1 = here
@@ -667,13 +657,8 @@ class Places:
     def search(self, q: str, limit: int = 8) -> list[dict]:
         """Places whose name (or ASCII or alternate name) starts with q, or with q's first words when
         the rest name the place's region and/or country (_Qualifiers): "Portland, Oregon", "Paris
-        France". Accent- and case-insensitive. Alternate names only once the name typed is
-        ALIAS_MIN_CHARS+ long. The most populous first, a place whose own name is the whole name
-        typed counting WHOLE_NAME_BOOST times its population, one found by an alternate name
-        ALIAS_DISCOUNT times fewer, and one whose region or country the qualifier names whole
-        WHOLE_QUALIFIER_BOOST times more ("Cambridge, MA": Massachusetts before Maryland). Not
-        whole qualifiers first outright: then while typing "Santiago, Sa" (Santiago Metropolitan),
-        any Santiago in a region coded SA would beat Santiago, Chile."""
+        France". Accent- and case-insensitive. Ranked by population, scaled by WHOLE_NAME_BOOST,
+        ALIAS_DISCOUNT and WHOLE_QUALIFIER_BOOST."""
         text = normalize(q).strip()
         if len(text.rstrip(" ,")) < 2 or limit <= 0:
             return []
@@ -686,6 +671,15 @@ class Places:
             if len(name) < ALIAS_MIN_CHARS:
                 keys = keys[~self._key_alias[keys]]
             whole = keys < bisect.bisect_right(self._keys, name, span.start, span.stop)
+            # Once the name typed is some place's whole name, an alternate name that goes on from it
+            # with more words is another name altogether: Jakarta's nickname "New York Van Java" isn't
+            # a New York. One it ends partway through a word of is still being typed: "Colo" (a town
+            # in Iowa) finds Köln by "Cologne".
+            if whole.any():
+                more_words = np.array([self._keys[k][len(name)] == " " for k in keys[~whole]], dtype=bool)
+                keep = whole | ~self._key_alias[keys]
+                keep[~whole] |= ~more_words
+                keys, whole = keys[keep], whole[keep]
             level = np.where(self._key_alias[keys], 0, np.where(whole, 2, 1))  # into _MATCH_WEIGHTS
             place = self._key_place[keys]
             boost = np.ones(keys.size, dtype=np.int64)  # WHOLE_QUALIFIER_BOOST where the qualifier names it whole

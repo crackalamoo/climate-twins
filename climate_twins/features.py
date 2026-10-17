@@ -43,17 +43,14 @@ WEIGHTS = {
 VARIANCE_TARGET = 0.99
 
 # Precipitation is compared on a log scale so 100 vs 500 mm counts as much as 20 vs
-# 100 mm, but the offset keeps dry months alike: with log1p, 2 vs 10 mm (both dry)
-# counted nearly as much as 100 vs 500 mm and made up ~40% of the precipitation
-# difference among top matches.
+# 100 mm; the offset keeps dry months alike. With log1p, 2 vs 10 mm (both dry) counts
+# nearly as much as 100 vs 500 mm, ~40% of the precipitation difference among top matches.
 PPT_OFFSET_MM = 15.0
 
-# Sunniness is the clearness index: surface solar radiation / top-of-atmosphere
-# radiation for the cell's latitude and month (~0.75 clear, ~0.3 overcast). Raw solar
-# radiation mostly tracks latitude and day length, which temperature already captures.
-# In months with little or no sun (polar night) the ratio is meaningless, so it blends
-# toward the cell's annual clearness once top-of-atmosphere radiation falls to about
-# this level.
+# Sunniness is the clearness index, surface / top-of-atmosphere solar radiation (~0.75
+# clear, ~0.3 overcast); raw radiation mostly tracks latitude, which temperature already
+# captures. Near polar night the ratio is meaningless, so it blends toward the cell's
+# annual clearness once top-of-atmosphere radiation falls to about this level.
 CLEARNESS_BLEND_W_M2 = 20.0
 SOLAR_CONSTANT_W_M2 = 1367.0
 DAYS_IN_MONTH = np.array([31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31])

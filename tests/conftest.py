@@ -284,8 +284,7 @@ GEONAMES_ROWS = [
     # Across a sea from a big foreign city, around (15, 30): the villages there say ER.
     *((f"Coast {k}", f"Coast {k}", 15.0 + 0.05 * k, 30.0, "ER", "", 700, "PPL") for k in range(5)),
     ("Portcity", "Portcity", 15.0, 31.0, "SA", "10", 3_000_000, "PPL"),  # ~107 km E: labels it, foreign
-    # A sparsely mapped country (SS, north of lat 4 in BOUNDARY_POLYGONS) beside a densely mapped
-    # one (UG, south of it): the towns nearest (4.3, 32) are mostly across the border.
+    # A sparsely mapped country (SS) beside a densely mapped one (UG): see BOUNDARY_POLYGONS.
     ("Northtown", "Northtown", 5.5, 32.0, "SS", "01", 400_000, "PPL"),
     *((f"Border {k}", f"Border {k}", 3.9 - 0.05 * k, 32.0, "UG", "N", 800, "PPL") for k in range(8)),
     # A region split after Natural Earth drew it: most of the old Almaty Region's towns are now in Zhetysu.
@@ -319,12 +318,14 @@ GEONAMES_ROWS = [
     ("Chongqing", "Chongqing", 29.56, 106.55, "CN", "32", 22_000_000, "PPLA"),  # junk alternate name "Pa"
     ("Mexico City", "Mexico City", 19.43, -99.13, "MX", "09", 12_294_193, "PPLC"),
     ("Mexico", "Mexico", 15.07, 120.72, "PH", "03", 43_694, "PPL"),
+    ("Jakarta", "Jakarta", -6.21, 106.85, "ID", "04", 8_540_121, "PPLC"),  # nicknamed "New York Van Java"
+    ("New York Mills", "New York Mills", 43.11, -75.29, "US", "NY", 3_308, "PPL"),
 ]
 # Alternate names beyond the name and ASCII name, by name (search only uses them for cities
 # that can label). Portland's "Bridgetown" is a nickname.
 GEONAMES_ALIASES = {
-    "New York City": "NYC,Big Apple,NY", "Portland": "PDX,Bridgetown", "Bordeaux": "Porto",
-    "Chongqing": "Pa,Chungking", "Mexico City": "Mexico,CDMX",
+    "New York City": "New York,NYC,Big Apple,NY", "Portland": "PDX,Bridgetown", "Bordeaux": "Porto",
+    "Chongqing": "Pa,Chungking", "Mexico City": "Mexico,CDMX", "Jakarta": "New York Van Java",
 }
 GEONAMES_ADMIN1 = {
     "BR.27": "São Paulo", "BR.13": "Maranhão", "BR.23": "Rio Grande do Sul", "PT.17": "Porto",
@@ -337,7 +338,7 @@ GEONAMES_ADMIN1 = {
     "CA.02": "British Columbia", "CA.07": "Nova Scotia", "AU.01": "Australian Capital Territory",
     "AU.02": "New South Wales", "US.WA": "Washington", "FR.75": "Nouvelle-Aquitaine", "CN.32": "Chongqing",
     "MX.09": "Mexico City", "PH.03": "Central Luzon", "NZ.E8": "Waikato", "AU.08": "Western Australia",
-    "CL.12": "Santiago Metropolitan", "GT.17": "Sacatepéquez",
+    "CL.12": "Santiago Metropolitan", "ID.04": "Jakarta", "GT.17": "Sacatepéquez",
 }
 GEONAMES_COUNTRIES = {
     "BR": "Brazil", "PT": "Portugal", "CH": "Switzerland", "US": "United States", "SA": "Saudi Arabia", "TD": "Chad",

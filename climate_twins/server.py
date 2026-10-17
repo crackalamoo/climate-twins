@@ -9,7 +9,7 @@
     GET /tiles/{z}/{x}/{y}.png?lat=..&lon=..[&align=auto&exclude_km=1500]
     GET /heatmap/legend
 
-See docs/ui-api.md.
+See docs/api.md.
 """
 
 import argparse
@@ -46,8 +46,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 # area (Vancouver, WA is 15 km from Portland), where "closer than Vancouver" says nothing.
 RULER_MIN_KM = 50.0
 # Only major cities: with every 100k+ city, nearly every match is "about as close as" some suburb
-# (Renton, Coquitlam, East Los Angeles). A city within RULER_MIN_KM of a more populous one is part of
-# its metro area too, and folds into it (the Bronx into New York).
+# (Renton, Coquitlam). A city within RULER_MIN_KM of a more populous one folds into its metro area.
 RULER_MIN_POPULATION = 500_000
 # "About as close" as a ruler city: a match's distance within this fraction of the city's, either
 # way. A judgment call: distances within ~10% are hard to tell apart in the charts.
@@ -201,7 +200,7 @@ def places_search(
     limit: Annotated[int, Query(ge=1, le=50)] = 8,
 ) -> list[dict]:
     """Autocomplete: places whose name starts with q, optionally followed by their region and/or
-    country ("Portland, Oregon"); whole names first, then the most populous."""
+    country ("Portland, Oregon"). See Places.search for ranking."""
     places: Places | None = request.app.state.places
     return places.search(q, limit) if places is not None else []
 

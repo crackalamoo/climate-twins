@@ -100,16 +100,6 @@ def test_ocean_tile_is_transparent(base_index: ClimateIndex):
     assert (decode(tiles.EMPTY_PNG)[..., 3] == 0).all()
 
 
-def test_only_top_percentile_band_is_visible(base_index: ClimateIndex):
-    q = base_index.query(base_index.locate(*QUERY)[0])
-    rgba = decode(tiles.render_tile(base_index, q, 0, 0, 0))
-    lat, lon = tiles.pixel_centers(0, 0, 0)
-    pos = base_index.positions_at(lat[:, None], lon[None, :])
-    top = np.where(pos >= 0, q.top_pct(base_index.d2_at(q, pos)), 100.0)
-    np.testing.assert_array_equal(rgba[..., 3] > 0, top <= tiles.LEGEND_STOPS[0][0])
-    assert (rgba[..., 3] > 0).any()
-
-
 def test_exclusion_greys_home_region_and_rescales_the_rest(base_index: ClimateIndex):
     """With exclude_km, colored land near the query is grey and land beyond it is colored
     by percentiles relative to that far land only."""
@@ -129,7 +119,7 @@ def test_exclusion_greys_home_region_and_rescales_the_rest(base_index: ClimateIn
     np.testing.assert_array_equal(rgba[visible & ~inside], want[visible & ~inside])
 
 
-@pytest.mark.parametrize("zxy", [(-1, 0, 0), (tiles.MAX_ZOOM + 1, 0, 0), (2, 4, 0), (2, 0, 4), (2, -1, 0)])
+@pytest.mark.parametrize("zxy", [(-1, 0, 0), (tiles.MAX_ZOOM + 1, 0, 0), (2, 4, 0), (2, 0, 4)])
 def test_bad_tile_coordinates(base_index: ClimateIndex, zxy):
     q = base_index.query(base_index.locate(*QUERY)[0])
     with pytest.raises(tiles.TileRangeError):

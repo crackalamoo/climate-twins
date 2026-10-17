@@ -47,9 +47,8 @@ def _points(lat, lon) -> np.ndarray:
 
 
 class Boundaries:
-    """Admin-1 polygons, each with Natural Earth's country code (None where it has none), its
-    GeoNames admin1 code ("US.CA"; None where it has none), its names, and its ISO 3166-2 code
-    ("US-CA"; None where it has none), which search uses as an abbreviation of the region."""
+    """Admin-1 polygons, each with its country code, GeoNames admin1 code ("US.CA"), names,
+    and ISO 3166-2 code ("US-CA", which search uses as a region abbreviation); codes may be None."""
 
     def __init__(
         self,

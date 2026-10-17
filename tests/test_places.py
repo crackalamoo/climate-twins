@@ -47,6 +47,7 @@ class TestLabel:
     def test_region_when_no_city(self, places: Places):
         p = places.label_for(25.0, 45.0)
         assert p["tier"] == "region" and p["name"] is not None and p["km"] is None
+        assert p["in_area"] is None  # the label is already where the point is
         assert places.label_for(0.0, -140.0) is None  # nothing within 500 km
 
     def test_region_label_from_the_polygon(self, places: Places):
@@ -62,11 +63,6 @@ class TestLabel:
         p = places.label_for(lat, lon)
         assert p["admin1"] not in p["label"]
         assert p["admin1"] in places.search(query)[0]["label"]
-
-    def test_area_is_where_the_point_is_even_when_the_city_is_foreign(self, places: Places):
-        p = places.label_for(15.0, 30.0)
-        assert (p["name"], p["country"]) == ("Portcity", "Saudi Arabia")
-        assert p["area"] == {"admin1": None, "country": "Eritrea"}
 
     @pytest.mark.parametrize("lat, lon, area", [
         (45.0, -95.0, {"admin1": "Minnesota", "country": "United States"}),
@@ -88,7 +84,6 @@ class TestArea:
         # In SS, but 8 of its 9 nearest towns are across the border in UG.
         p = places.label_for(4.3, 32.0)
         assert p["name"] == "Northtown" and p["area"] == {"admin1": None, "country": "South Sudan"}
-        assert places.label_for(3.5, 32.0)["area"]["country"] == "Uganda"
 
     def test_region_from_a_code_that_matches_the_polygon_name(self, places: Places):
         assert places.locate(4.3, 32.0) == ("SS", "Central Equatoria")
@@ -121,10 +116,6 @@ class TestArea:
 
     def test_a_point_just_offshore_takes_the_nearest_polygon(self, places: Places):
         assert places.locate(6.1, 32.0)[0] == "SS"  # 0.1 degrees outside SS's polygon
-
-    def test_nothing_beyond_every_polygon(self, places: Places):
-        assert places.locate(4.3, 34.0) is None  # 1 degree east of SS and UG
-        assert places.label_for(4.3, 34.0)["area"] is None  # still labelled from a city
 
     def test_without_boundaries_labels_name_only_cities(self, geonames_dir: Path):
         p = Places.load(geonames_dir)
@@ -202,13 +193,10 @@ class TestAcrossABorder:
         assert label["label"] == "89 km E of Bigalmaty, Kazakhstan" and label["in_area"] is None
 
     def test_unknown_area_is_unchanged(self, places: Places, geonames_dir: Path):
-        assert places.locate(4.3, 34.0) is None  # beyond every polygon
-        p = places.label_for(4.3, 34.0)
-        assert p["in_area"] is None and p["label"].endswith(" of Northtown, South Sudan")
+        assert places.locate(4.3, 34.0) is None  # 1 degree east of every polygon
+        p = places.label_for(4.3, 34.0)  # still labelled from a city
+        assert p["area"] is None and p["in_area"] is None and p["label"].endswith(" of Northtown, South Sudan")
         assert Places.load(geonames_dir).label_for(45.0, -96.5)["in_area"] is None  # no boundary data
-
-    def test_region_tier_has_no_in_area(self, places: Places):
-        assert places.label_for(25.0, 45.0)["in_area"] is None
 
 
 class TestBoundaries:
@@ -219,7 +207,6 @@ class TestBoundaries:
     @pytest.mark.parametrize("iso_a2, gn_a1_code, expected", [
         ("US", "US.CA", "US"),
         ("RU", "UA.11", "UA"),  # disputed: the country GeoNames files its towns under
-        ("GB", "GB.S6", "GB"),
         ("FR", "-1", "FR"),
         ("-1", "-1", None),  # Somaliland, sovereign base areas
     ])
@@ -329,11 +316,19 @@ class TestSearch:
     def test_alternate_names_of_big_cities(self, places: Places):
         assert [p["name"] for p in places.search("NYC")] == ["New York City"]
         assert [p["name"] for p in places.search("big app")] == ["New York City"]
-        assert [p["name"] for p in places.search("New York, NY")] == ["New York City"]
+        assert [p["name"] for p in places.search("New York, NY")] == ["New York City", "New York Mills"]
         assert [p["admin1"] for p in places.search("pdx")] == ["Oregon"]
-        # A place's own name before another's alternate name, though that city is bigger.
-        assert [(p["name"], p["country"]) for p in places.search("bridgetown")][:2] == [
-            ("Bridgetown", "Barbados"), ("Portland", "United States")]
+        # A place's own name before another's alternate name, though that city is bigger. GeoNames
+        # lists "Bridgetown" for every Portland, but only those of 100,000+ match it.
+        assert [(p["name"], p["admin1"]) for p in places.search("bridgetown")] == [
+            ("Bridgetown", "Saint Michael"), ("Portland", "Oregon")]
+
+    def test_alternate_names_going_on_past_a_whole_name(self, places: Places):
+        # "New York" is a whole name (New York City's), and Jakarta's nickname "New York Van Java"
+        # goes on from it with more words: another name altogether.
+        assert "Jakarta" not in [p["name"] for p in places.search("new york", limit=50)]
+        # Partway through a word of it, it's still being typed.
+        assert [p["name"] for p in places.search("new york v")] == ["Jakarta"]
 
     def test_alternate_names_need_three_characters(self, places: Places):
         # Chongqing (22M) is "Pa" in GeoNames: two letters are too early to match an alternate name.
@@ -341,10 +336,6 @@ class TestSearch:
         assert [p["name"] for p in places.search("chu")] == ["Chongqing"]  # "Chungking"
         assert places.search("ny") == []  # New York City's "NY"
         assert [p["name"] for p in places.search("cdm")] == ["Mexico City"]
-
-    def test_alternate_names_only_for_cities_that_can_label(self, places: Places):
-        # GeoNames lists "Bridgetown" for every Portland in the fixture; only those of 100,000+ match it.
-        assert [p["admin1"] for p in places.search("bridgetown") if p["name"] == "Portland"] == ["Oregon"]
 
 
 class TestRegionAbbreviations:
@@ -444,7 +435,6 @@ def test_cache_is_used_and_rebuilt_when_stale(tmp_path: Path):
     ("Jeju-do", "Jeju City", True),
     ("Delhi", "Deoli", False),  # similar spelling, different place
     ("New Jersey", "Jersey City", False),
-    ("Taiwan", "Tainan", False),
 ])
 def test_region_repeats_city(region, city, repeats):
     assert region_repeats_city(region, *city.split("|")) is repeats

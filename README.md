@@ -40,7 +40,7 @@ Tests: `uv run pytest -q` (synthetic data; doesn't need the real index).
 ## API
 
 `/similar`, `/climate`, `/places/search`, `/tiles/{z}/{x}/{y}.png`,
-`/heatmap/legend` and `/health`; all metric. See `docs/ui-api.md` for the full contract.
+`/heatmap/legend` and `/health`; all metric. See `docs/api.md`.
 
 ```sh
 curl 'localhost:8000/similar?lat=37.77&lon=-122.42&n=5'
@@ -69,7 +69,7 @@ curl 'localhost:8000/similar?lat=37.77&lon=-122.42&n=5'
   differ from its cell.
 - Normals only: nothing about variability, extremes or storms.
 - Place labels name a nearby large city, not the cell itself (rules in
-  `docs/ui-api.md`).
+  `places.py`).
 
 ## Data sources
 

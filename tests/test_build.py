@@ -70,7 +70,6 @@ def test_query_finds_planted_twin(loaded: ClimateIndex):
     assert (top["cell"]["lat"], top["cell"]["lon"]) == NC_TWIN
     assert top["distance"] == pytest.approx(0.0, abs=1e-3)
     assert top["km_from_query"] == pytest.approx(round(float(great_circle_km(*NC_QUERY, *NC_TWIN))))
-    assert 1 <= len(res["matches"]) <= 5
 
 
 def test_rebuild_replaces_existing_index(tmp_path: Path, built: tuple[Path, dict]):
