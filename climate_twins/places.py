@@ -5,7 +5,8 @@ cities500.txt, admin1CodesASCII.txt and countryInfo.txt. Parsed once into a comp
 places.npz cache next to them, which is rebuilt whenever a source file is newer.
 Where a point is (its country and region) comes from boundary polygons (boundaries.py).
 Search matches a place's name, optionally followed by its region and/or country
-("Portland, Oregon", "Paris France", "Portland OR, USA"), as GeoNames names and codes them.
+("Portland, Oregon", "Paris France", "Portland OR, USA"), as GeoNames names and codes them,
+plus regions' ISO 3166-2 codes from the boundary data where GeoNames' are numbers ("Vancouver, BC").
 """
 
 import bisect
@@ -43,6 +44,32 @@ NEAR_KM = 25.0  # closer than this to the city, the label is "near <city>"
 # Search also finds cities that can label (CITY_MIN_POPULATION+) by all their GeoNames alternate
 # names: other languages, former names, abbreviations ("NYC") and airport codes ("PDX").
 SPELLING_SIMILARITY = 0.75  # an alternate name this close to the name is another spelling of it
+# Search ranks by population, but a place whose own name is the whole name typed ranks as if this many
+# times as populous: a subjective choice. Big enough that "Porto" puts Porto (250k) above Porto Alegre
+# (1.4M); small enough that while typing "Par", Paris (2.1M) is above Par, England (9k).
+WHOLE_NAME_BOOST = 10
+# A match by alternate name, whole or in part, ranks as if this many times less populous: also a
+# subjective choice. GeoNames gives cities other places' names and many languages' forms of their own:
+# Bordeaux is also "Porto", Jerusalem "Salem", Perth "Partha" (so it would beat Paris at "Par"). Small
+# enough that Mexico City (12M) by "Mexico" is above every place called Mexico.
+ALIAS_DISCOUNT = 10
+# Alternate names match only once the name typed is this long: two letters are too early to guess one,
+# and GeoNames has junk short ones (Chongqing as "Pa").
+ALIAS_MIN_CHARS = 3
+# A place whose region or country the qualifier names whole (all of its name, or a code) ranks as if
+# this many times as populous as one it names only in part: also a subjective choice, set like
+# WHOLE_NAME_BOOST. Big enough that "Cambridge, MA" puts Cambridge, Massachusetts (110k) above
+# Cambridge, Maryland (13k), which "MA" only starts; small enough that a code doesn't beat someone
+# still typing a region's name: "Santiago, Sa" is Santiago, Chile (Santiago Metropolitan), not
+# Santiago Sacatepéquez, Guatemala (code SA).
+WHOLE_QUALIFIER_BOOST = 10
+# A qualifier typed as capitals of this many letters is a code, not the start of a name: "Valencia,
+# CA" is California (or Canada), not Carabobo, which would otherwise win on population (Valencia,
+# Venezuela is 11x Valencia, California), unless it names nothing whole. Lowercase "ca" could be
+# either. One letter is too early to tell.
+CODE_LETTERS = (2, 3)
+# Weight of a match by alternate name, by a place's own name in part, and by its whole own name.
+_MATCH_WEIGHTS = np.array([1, ALIAS_DISCOUNT, ALIAS_DISCOUNT * WHOLE_NAME_BOOST], dtype=np.int64)
 # Naming boundary polygons (Places._polygon_areas): the towns inside one name its country, or
 # a region it has no usable code for, only if there are at least this many and every one agrees.
 POLYGON_MIN_TOWNS = 3
@@ -166,18 +193,31 @@ def _readings(text: str) -> Iterator[tuple[str, list[str]]]:
 
 class _Qualifiers:
     """What can follow a place's name in a search: its region (admin1), its country, or both.
-    A region by its GeoNames name or admin1 code ("Oregon", "OR"; "England", "ENG"). A country
-    by name, ISO 3166 alpha-2 or alpha-3 code, or its internet domain where no other country
-    shares it ("United States", "US", "USA"; "United Kingdom", "GB", "GBR", "UK")."""
+    A region by its GeoNames name or admin1 code ("Oregon", "OR"; "England", "ENG"), or by an
+    abbreviation (Places._region_abbreviations: "BC" for GeoNames' CA.02, British Columbia). A
+    country by name, ISO 3166 alpha-2 or alpha-3 code, or its internet domain where no other
+    country shares it ("United States", "US", "USA"; "United Kingdom", "GB", "GBR", "UK").
+    A code can name several regions (GeoNames' "OR" is Oregon and regions elsewhere): it names
+    each of them, and the place's name and population decide."""
 
     def __init__(self, admin1_codes: list[str], admin1_names: list[str], country_codes: list[str],
-                 country_names: list[str], iso3: list[str], tlds: list[str]):
+                 country_names: list[str], iso3: list[str], tlds: list[str],
+                 abbreviations: dict[str, str] | None = None):
         country = {cc: j for j, cc in enumerate(country_codes)}
         self.region_country = [country.get(code.split(".")[0], -1) for code in admin1_codes]
         self.region_keys, self.region_ids = self._sorted(admin1_names)
         self.region_codes: dict[str, list[int]] = {}
         for r, code in enumerate(admin1_codes):
             self.region_codes.setdefault(code.split(".", 1)[-1].casefold(), []).append(r)
+        # An abbreviation adds a code for its region, unless GeoNames already gives that code to a region
+        # of the same country: then it's that region's own code (US-OR is Oregon's "OR" anyway), or
+        # another region's, which it must keep.
+        region_index = {code: r for r, code in enumerate(admin1_codes)}
+        own = {(self.region_country[r], code) for code, rs in self.region_codes.items() for r in rs}
+        for code, abbreviation in (abbreviations or {}).items():
+            r, key = region_index.get(code), abbreviation.casefold()
+            if r is not None and (self.region_country[r], key) not in own:
+                self.region_codes.setdefault(key, []).append(r)
         self.country_keys, self.country_ids = self._sorted(country_names)
         self.country_codes: dict[str, set[int]] = {}
         shared = Counter(tlds)
@@ -340,6 +380,7 @@ class Places:
     def __init__(self, cols: dict[str, np.ndarray], boundaries: Boundaries | None = None):
         self.name, self.asciiname, self.admin1, self.country = (_unpack(cols[k]) for k in _STR_FIELDS)
         self.admin1_by_code = dict(zip(_unpack(cols["admin1_codes"]), _unpack(cols["admin1_names"])))
+        self.boundaries = boundaries
         self.country_by_code = dict(zip(_unpack(cols["country_codes"]), _unpack(cols["country_names"])))
         self.country_code = cols["country_code"].tolist()
         self.lat, self.lon = cols["lat"], cols["lon"]
@@ -353,13 +394,13 @@ class Places:
         self.qualifiers = _Qualifiers(
             _unpack(cols["admin1_codes"]), _unpack(cols["admin1_names"]), country_codes,
             _unpack(cols["country_names"]), _unpack(cols["country_iso3"]), _unpack(cols["country_tlds"]),
+            self._region_abbreviations() if boundaries is not None else None,
         )
         n = len(self.lat)
         assert all(
             len(a) == n for a in (self.name, self.asciiname, self.admin1, self.country, self.alt_names, self.country_code)
         )
         self.tree = cKDTree(unit_vectors(self.lat, self.lon))
-        self.boundaries = boundaries
         self.polygon_areas = self._polygon_areas() if boundaries is not None else []
 
         # One key per distinct normalized name or ASCII name of each place, and per other alternate
@@ -440,6 +481,45 @@ class Places:
             region = coded if coded is not None else _unanimous(regions) or ""
             areas.append((cc, region))
         return areas
+
+    def _region_abbreviations(self) -> dict[str, str]:
+        """GeoNames admin1 code -> the abbreviation people write for that region, from the ISO 3166-2
+        codes of its boundary polygons: "CA.02" -> "BC" (CA-BC), "AU.02" -> "NSW". GeoNames' own
+        codes for many countries' regions are only numbers, so without these "Vancouver, BC" finds
+        nothing. Not Natural Earth's `postal` field: it has NSW as "NS" and Queensland as "QL".
+        A code is used only where it's surely that region's:
+        - the ISO code is in the GeoNames code's country, and some polygon with that GeoNames code is
+          named as GeoNames names the region (_admin1_named: a stale code names some other region);
+        - every polygon with that GeoNames code has the same ISO code (UK and Italian polygons are
+          councils and provinces, many to one GeoNames region, each with its own ISO code);
+        - it has 2+ characters, one a letter: one letter would count as a whole region while
+          someone is still typing a name ("Springfield, I"), and nobody writes the numeric ones
+          ("JP-13"), which would also clash with GeoNames' own numeric codes.
+        One abbreviation for several regions of a country (Lima Province and Lima region are both
+        PE-LIM) names each of them, as codes do (_Qualifiers).
+        None for REGIONLESS_COUNTRIES, whose regions labels hide as obscure: nobody types their
+        codes (Guatemala's "SA", Colombia's "CAL"), which would only match someone partway through
+        another region's name ("Santiago, Sa"). The same set rather than another hand-made list.
+        Their region names and GeoNames' own codes still match: search results show the region,
+        and a result's label must find it again."""
+        b = self.boundaries
+        found: dict[str, set[str]] = {}
+        trusted: set[str] = set()
+        for code, iso, names in zip(b.admin1_codes, b.iso_codes, b.names):
+            if code is None or iso is None:
+                continue
+            cc, abbreviation = iso.split("-")
+            if code.startswith(cc + ".") and cc not in REGIONLESS_COUNTRIES:
+                found.setdefault(code, set()).add(abbreviation)
+                if self._admin1_named(code, cc, names) is not None:
+                    trusted.add(code)
+        abbreviations: dict[str, str] = {}
+        for code in trusted:
+            if len(found[code]) == 1:
+                (a,) = found[code]
+                if len(a) >= 2 and not a.isdigit():
+                    abbreviations[code] = a
+        return abbreviations
 
     def _admin1_named(self, code: str | None, cc: str, names: tuple[str, ...]) -> str | None:
         """GeoNames' region for admin1 code, if it's in country cc and is one of names
@@ -573,21 +653,28 @@ class Places:
     def search(self, q: str, limit: int = 8) -> list[dict]:
         """Places whose name (or ASCII or alternate name) starts with q, or with q's first words when
         the rest name the place's region and/or country (_Qualifiers): "Portland, Oregon", "Paris
-        France". Accent- and case-insensitive. Whole names before partial ones, a place's own name
-        before an alternate one, then the most populous first."""
+        France". Accent- and case-insensitive. Alternate names only once the name typed is
+        ALIAS_MIN_CHARS+ long. The most populous first, a place whose own name is the whole name
+        typed counting WHOLE_NAME_BOOST times its population, one found by an alternate name
+        ALIAS_DISCOUNT times fewer, and one whose region or country the qualifier names whole
+        WHOLE_QUALIFIER_BOOST times more ("Cambridge, MA": Massachusetts before Maryland). Not
+        whole qualifiers first outright: then while typing "Santiago, Sa" (Santiago Metropolitan),
+        any Santiago in a region coded SA would beat Santiago, Chile."""
         text = normalize(q).strip()
         if len(text.rstrip(" ,")) < 2 or limit <= 0:
             return []
-        n = len(self)
-        places, scores = [], []
+        lo, hi = CODE_LETTERS
+        codes = {normalize(w) for w in q.replace(",", " ").split() if lo <= len(w) <= hi and w.isalpha() and w.isupper()}
+        places, boosts, levels = [], [], []
         for name, qualifier in _readings(text):
             span = _prefixed(self._keys, name)
             keys = np.arange(span.start, span.stop)
+            if len(name) < ALIAS_MIN_CHARS:
+                keys = keys[~self._key_alias[keys]]
             whole = keys < bisect.bisect_right(self._keys, name, span.start, span.stop)
+            level = np.where(self._key_alias[keys], 0, np.where(whole, 2, 1))  # into _MATCH_WEIGHTS
             place = self._key_place[keys]
-            # Order: whole own name, whole alias, partial own name, partial alias; then by whether the
-            # qualifier names the region or country whole ("MA": Massachusetts before Maine).
-            tier = (np.where(whole, 0, 2) + self._key_alias[keys]) * 2
+            boost = np.ones(keys.size, dtype=np.int64)  # WHOLE_QUALIFIER_BOOST where the qualifier names it whole
             if qualifier and keys.size:
                 regions, countries = self.qualifiers.match(qualifier)
                 region, country = self.admin1_index[place], self.country_index[place]
@@ -597,11 +684,20 @@ class Places:
                     return np.isin(region, pick(regions)) | np.isin(country, pick(countries))
 
                 keep = named(False)
-                tier = tier + ~named(True)
-                tier, place = tier[keep], place[keep]
+                # Typed as codes ("CA"): only what they name whole, if anything (else "SAN JOSE, CAL",
+                # all capitals, would find nothing).
+                if all(w in codes for w in qualifier) and (exact := named(True)).any():
+                    keep = exact
+                boost = np.where(named(True)[keep], WHOLE_QUALIFIER_BOOST, 1)
+                level, place = level[keep], place[keep]
             places.append(place)
-            scores.append(tier.astype(np.int64) * n + self._rank[place])
-        place, score = np.concatenate(places), np.concatenate(scores)
-        place = place[np.argsort(score, kind="stable")]
+            boosts.append(boost)
+            levels.append(level)
+        place, level, boost = np.concatenate(places), np.concatenate(levels), np.concatenate(boosts)
+        # By weighted population, then (between equals, as with no population) the better kind of name
+        # match, then a whole qualifier, then population rank (stable: GeoNames file order).
+        weight = self.population[place] * _MATCH_WEIGHTS[level] * boost
+        order = np.lexsort((self._rank[place], -boost, -level, -weight))
+        place = place[order]
         _, first = np.unique(place, return_index=True)  # each place at its best score
         return [self.describe(int(i)) for i in place[np.sort(first)[:limit]]]

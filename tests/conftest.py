@@ -302,10 +302,30 @@ GEONAMES_ROWS = [
     ("Bridgetown", "Bridgetown", 13.1, -59.62, "BB", "08", 98_511, "PPLC"),
     ("Cambridge", "Cambridge", 42.37, -71.11, "US", "MA", 118_403, "PPL"),
     ("Cambridge", "Cambridge", 38.56, -76.08, "US", "MD", 500_000, "PPL"),  # not really this big
+    # Regions people abbreviate by ISO 3166-2 code, where GeoNames' codes are numbers.
+    ("Vancouver", "Vancouver", 49.25, -123.12, "CA", "02", 662_248, "PPL"),
+    ("Vancouver", "Vancouver", 45.64, -122.66, "US", "WA", 196_442, "PPL"),
+    ("Sydney", "Sydney", -33.87, 151.21, "AU", "02", 5_638_830, "PPLA"),
+    ("Sydney", "Sydney", 46.14, -60.19, "CA", "07", 105_968, "PPL"),
+    # A region's code (WA, GT-SA) against the start of another region's name (Waikato, Santiago Metropolitan).
+    ("Hamilton", "Hamilton", -37.78, 175.28, "NZ", "E8", 192_100, "PPL"),
+    ("Hamilton Hill", "Hamilton Hill", -32.08, 115.78, "AU", "08", 11_327, "PPL"),
+    ("Santiago", "Santiago", -33.45, -70.67, "CL", "12", 4_837_295, "PPLC"),
+    ("Santiago Sacatepéquez", "Santiago Sacatepequez", 14.63, -90.68, "GT", "17", 40_000, "PPL"),
+    # Ranking: population, with whole own names boosted.
+    ("Bordeaux", "Bordeaux", 44.84, -0.58, "FR", "75", 265_328, "PPLA"),  # also "Porto" in GeoNames
+    ("Par", "Par", 50.35, -4.70, "GB", "ENG", 9_462, "PPL"),
+    ("Pa", "Pa", 11.55, -3.26, "BF", "", 15_170, "PPL"),
+    ("Chongqing", "Chongqing", 29.56, 106.55, "CN", "32", 22_000_000, "PPLA"),  # junk alternate name "Pa"
+    ("Mexico City", "Mexico City", 19.43, -99.13, "MX", "09", 12_294_193, "PPLC"),
+    ("Mexico", "Mexico", 15.07, 120.72, "PH", "03", 43_694, "PPL"),
 ]
 # Alternate names beyond the name and ASCII name, by name (search only uses them for cities
 # that can label). Portland's "Bridgetown" is a nickname.
-GEONAMES_ALIASES = {"New York City": "NYC,Big Apple,NY", "Portland": "PDX,Bridgetown"}
+GEONAMES_ALIASES = {
+    "New York City": "NYC,Big Apple,NY", "Portland": "PDX,Bridgetown", "Bordeaux": "Porto",
+    "Chongqing": "Pa,Chungking", "Mexico City": "Mexico,CDMX",
+}
 GEONAMES_ADMIN1 = {
     "BR.27": "São Paulo", "BR.13": "Maranhão", "BR.23": "Rio Grande do Sul", "PT.17": "Porto",
     "CH.ZH": "Zurich", "US.MN": "Minnesota", "SA.10": "Riyadh Region",
@@ -314,11 +334,17 @@ GEONAMES_ADMIN1 = {
     "NO.21": "Trøndelag", "KZ.10": "Almaty Region", "KZ.17": "Zhetysu Region",
     "US.OR": "Oregon", "US.ME": "Maine", "US.TX": "Texas", "US.NY": "New York", "US.MA": "Massachusetts", "US.MD": "Maryland", "GB.ENG": "England",
     "FR.11": "Île-de-France", "FR.76": "Occitanie", "BB.08": "Saint Michael",
+    "CA.02": "British Columbia", "CA.07": "Nova Scotia", "AU.01": "Australian Capital Territory",
+    "AU.02": "New South Wales", "US.WA": "Washington", "FR.75": "Nouvelle-Aquitaine", "CN.32": "Chongqing",
+    "MX.09": "Mexico City", "PH.03": "Central Luzon", "NZ.E8": "Waikato", "AU.08": "Western Australia",
+    "CL.12": "Santiago Metropolitan", "GT.17": "Sacatepéquez",
 }
 GEONAMES_COUNTRIES = {
     "BR": "Brazil", "PT": "Portugal", "CH": "Switzerland", "US": "United States", "SA": "Saudi Arabia", "TD": "Chad",
     "RU": "Russia", "LY": "Libya", "CN": "China", "ER": "Eritrea", "SS": "South Sudan", "UG": "Uganda",
     "NO": "Norway", "KZ": "Kazakhstan", "GB": "United Kingdom", "FR": "France", "BB": "Barbados",
+    "CA": "Canada", "AU": "Australia", "BF": "Burkina Faso", "MX": "Mexico", "PH": "Philippines",
+    "NZ": "New Zealand", "CL": "Chile", "GT": "Guatemala",
 }
 # ISO 3166 alpha-3 codes and internet domains, where search tests need them (else "XXX" and none).
 GEONAMES_COUNTRY_CODES = {"US": ("USA", ".us"), "GB": ("GBR", ".uk"), "FR": ("FRA", ".fr")}
@@ -359,7 +385,7 @@ def _box(lon0: float, lat0: float, lon1: float, lat1: float) -> list[tuple[float
     return [(lon0, lat0), (lon0, lat1), (lon1, lat1), (lon1, lat0), (lon0, lat0)]
 
 
-# Natural Earth admin-1 polygons: (iso_a2, gn_a1_code, name, name_en, exterior ring).
+# Natural Earth admin-1 polygons: (iso_a2, gn_a1_code, name, name_en, exterior ring[, iso_3166_2]).
 BOUNDARY_POLYGONS = [
     ("US", "US.MN", "Minnesota", "Minnesota", _box(-97, 43, -93, 47)),
     ("LY", "LY.34", "Sabha", "Sabha", _box(12, 25, 15, 28)),
@@ -371,6 +397,15 @@ BOUNDARY_POLYGONS = [
     ("UG", "-1", "Gulu", "Gulu", _box(31, 2, 33, 4)),
     ("NO", "NO.21", "Svalbard", "Svalbard", _box(10, 78, 20, 80)),  # a stale code: NO.21 is now Trøndelag
     ("KZ", "KZ.10", "Almaty", "Almaty", _box(77, 44, 79, 45)),
+    # ISO 3166-2 codes, which search takes as region abbreviations where they're consistent.
+    ("CA", "CA.02", "British Columbia", "British Columbia", _box(-125, 48, -120, 51), "CA-BC"),
+    ("CA", "CA.07", "Nova Scotia", "Nova Scotia", _box(-62, 45, -59, 47), "CA-NS"),
+    ("AU", "AU.02", "New South Wales", "New South Wales", _box(150, -35, 152, -32), "AU-NSW"),
+    ("AU", "AU.02", "Lord Howe Island", "Lord Howe Island", _box(159, -32, 159.2, -31.4), "AU-NSW"),  # agrees
+    ("AU", "AU.", "Jervis Bay Territory", "", _box(140, -36, 141, -35), "AU-X02~"),  # placeholders
+    ("AU", "AU.08", "Western Australia", "Western Australia", _box(113, -35, 129, -14), "AU-WA"),
+    # Consistent, but Guatemala is in REGIONLESS_COUNTRIES: no abbreviation.
+    ("GT", "GT.17", "Sacatepéquez", "Sacatepéquez", _box(-90.9, 14.4, -90.5, 14.8), "GT-SA"),
 ]
 
 
@@ -382,9 +417,10 @@ def write_boundaries(directory: Path, polygons=BOUNDARY_POLYGONS) -> Path:
         w.field("gn_a1_code", "C", size=10)
         w.field("name", "C", size=40)
         w.field("name_en", "C", size=40)
-        for iso_a2, gn_a1_code, name, name_en, ring in polygons:
+        w.field("iso_3166_2", "C", size=10)
+        for iso_a2, gn_a1_code, name, name_en, ring, *iso in polygons:
             w.poly([ring])
-            w.record(iso_a2, gn_a1_code, name, name_en)
+            w.record(iso_a2, gn_a1_code, name, name_en, iso[0] if iso else "-99")
     return directory
 
 

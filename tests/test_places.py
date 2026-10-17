@@ -5,7 +5,7 @@ import pytest
 
 from climate_twins.boundaries import Boundaries, _country_code
 from climate_twins.places import (
-    CACHE_FILE, Places, _region_key, _spellings, region_is_generic, region_repeats_city,
+    CACHE_FILE, REGIONLESS_COUNTRIES, Places, _region_key, _spellings, region_is_generic, region_repeats_city,
 )
 
 from .conftest import GEONAMES_ROWS, _box, write_boundaries, write_geonames
@@ -77,7 +77,7 @@ class TestLabel:
         assert places.label_for(lat, lon)["area"] == area
 
     def test_sections_are_searchable_but_never_labels(self, places: Places):
-        assert [p["name"] for p in places.search("midtown")] == ["Midtown", "Midtown Heights"]
+        assert {p["name"] for p in places.search("midtown")} == {"Midtown", "Midtown Heights"}
         assert places.label_for(45.01, -95.01)["name"] == "Midtown"
 
 
@@ -249,11 +249,20 @@ class TestSearch:
             assert [p["name"] for p in places.search(q)] == ["São Paulo", "São Luís"]
         assert [p["name"] for p in places.search("zur")] == ["Zürich"]
 
-    def test_whole_names_first_then_by_population(self, places: Places):
-        assert [p["name"] for p in places.search("porto")] == ["Porto", "Porto Alegre"]
-        assert [p["name"] for p in places.search("port")] == ["Portcity", "Porto Alegre", "Portland", "Porto", "Portland", "Portland"]
+    def test_by_population_with_whole_names_boosted(self, places: Places):
+        # Porto (250k) counts as 2.5M: above Porto Alegre (1.5M), which only starts with "porto".
+        # Bordeaux (265k) is "Porto" too in GeoNames, but an alternate name counts as 26k.
+        assert [p["name"] for p in places.search("porto")] == ["Porto", "Porto Alegre", "Bordeaux"]
+        # While typing: Paris (2.1M) is above Par (9k, as 95k) and Pa (15k, as 150k); Par is above
+        # Paris, Texas (25k).
+        assert [p["name"] for p in places.search("par")] == ["Paris", "Par", "Paris", "Parisot"]
+        assert [p["name"] for p in places.search("pa")][0] == "Paris"
+        assert [p["name"] for p in places.search("mexico")] == ["Mexico City", "Mexico"]  # an alternate name
+        # All names in part, by population: Bordeaux's "Porto" is an alternate name, so as 26k.
+        assert [p["name"] for p in places.search("port")] == [
+            "Portcity", "Porto Alegre", "Portland", "Porto", "Portland", "Bordeaux", "Portland"]
         assert places.search("s") == []  # too short
-        assert [p["name"] for p in places.search("sa", limit=2)] == ["São Paulo", "São Luís"]
+        assert [p["name"] for p in places.search("sa", limit=2)] == ["São Paulo", "Santiago"]
 
     @pytest.mark.parametrize("q", [
         "Portland, Oregon", "portland oregon", "Portland OR", "Portland, OR", "PORTLAND,OREGON",
@@ -279,11 +288,27 @@ class TestSearch:
     def test_qualifier_filters(self, places: Places, q, expected):
         assert [p["admin1"] for p in places.search(q)] == expected
 
-    def test_whole_qualifiers_before_partial_ones(self, places: Places):
-        # "MA" is Massachusetts' code and the start of Maryland.
-        assert [p["admin1"] for p in places.search("Cambridge, MA")] == ["Massachusetts", "Maryland"]
+    def test_whole_qualifiers_boosted(self, places: Places):
+        # "MA" is Massachusetts' code and the start of Maryland: Cambridge, Massachusetts (118k) counts
+        # WHOLE_QUALIFIER_BOOST times over Cambridge, Maryland (500k in the fixture).
         assert [p["admin1"] for p in places.search("Cambridge, Ma")] == ["Massachusetts", "Maryland"]
         assert [p["admin1"] for p in places.search("Cambridge, Mar")] == ["Maryland"]
+
+    def test_capitals_are_a_code(self, places: Places):
+        # Typed in capitals, "MA" and "WA" are codes, not the starts of Maryland and Waikato; "M" is too
+        # short to tell; and capitals that name nothing whole still match names they start.
+        assert [p["admin1"] for p in places.search("Cambridge, MA")] == ["Massachusetts"]
+        assert [p["admin1"] for p in places.search("Cambridge, M")] == ["Maryland", "Massachusetts"]  # by population
+        assert [p["admin1"] for p in places.search("Hamilton, WA")] == ["Western Australia"]
+        assert [p["admin1"] for p in places.search("CAMBRIDGE, MAR")] == ["Maryland"]
+
+    def test_a_code_doesnt_beat_a_region_name_being_typed(self, places: Places):
+        # "Wa" is Western Australia's code, and the start of Waikato: population decides.
+        assert [(p["name"], p["admin1"]) for p in places.search("Hamilton, Wa")] == [
+            ("Hamilton", "Waikato"), ("Hamilton Hill", "Western Australia")]
+        assert [p["name"] for p in places.search("Hamilton Hill, WA")] == ["Hamilton Hill"]
+        assert [(p["name"], p["admin1"]) for p in places.search("Santiago, Sa")] == [
+            ("Santiago", "Santiago Metropolitan"), ("Santiago Sacatepéquez", "Sacatepéquez")]
 
     def test_qualifier_codes_match_only_whole(self, places: Places):
         assert [p["admin1"] for p in places.search("Portland, U")] == ["Oregon", "Maine", "England"]  # United ...
@@ -310,9 +335,85 @@ class TestSearch:
         assert [(p["name"], p["country"]) for p in places.search("bridgetown")][:2] == [
             ("Bridgetown", "Barbados"), ("Portland", "United States")]
 
+    def test_alternate_names_need_three_characters(self, places: Places):
+        # Chongqing (22M) is "Pa" in GeoNames: two letters are too early to match an alternate name.
+        assert "Chongqing" not in [p["name"] for p in places.search("pa", limit=50)]
+        assert [p["name"] for p in places.search("chu")] == ["Chongqing"]  # "Chungking"
+        assert places.search("ny") == []  # New York City's "NY"
+        assert [p["name"] for p in places.search("cdm")] == ["Mexico City"]
+
     def test_alternate_names_only_for_cities_that_can_label(self, places: Places):
         # GeoNames lists "Bridgetown" for every Portland in the fixture; only those of 100,000+ match it.
         assert [p["admin1"] for p in places.search("bridgetown") if p["name"] == "Portland"] == ["Oregon"]
+
+
+class TestRegionAbbreviations:
+    """ISO 3166-2 codes of boundary polygons as region qualifiers, where GeoNames' codes are numbers."""
+
+    @pytest.mark.parametrize("q, expected", [
+        ("Vancouver, BC", [("Vancouver", "British Columbia")]),
+        ("vancouver bc canada", [("Vancouver", "British Columbia")]),
+        ("Sydney NSW", [("Sydney", "New South Wales")]),  # from two polygons that agree
+        ("Sydney, NS", [("Sydney", "Nova Scotia")]),
+        ("Vancouver, WA", [("Vancouver", "Washington")]),  # GeoNames' own codes still work
+        ("Sydney, N", [("Sydney", "New South Wales"), ("Sydney", "Nova Scotia")]),  # names by prefix
+    ])
+    def test_abbreviation_names_the_region(self, places: Places, q, expected):
+        assert [(p["name"], p["admin1"]) for p in places.search(q)] == expected
+
+    def test_only_consistent_codes(self, places: Places):
+        assert places._region_abbreviations() == {"CA.02": "BC", "CA.07": "NS", "AU.02": "NSW", "AU.08": "WA"}
+
+    def test_none_for_countries_whose_regions_labels_hide(self, places: Places):
+        # Guatemala's GT-SA polygon is consistent, but labels hide its regions: "SA" is only the
+        # start of Sacatepéquez, not its code.
+        assert "GT" in REGIONLESS_COUNTRIES and "GT.17" not in places._region_abbreviations()
+        regions, _ = places.qualifiers.match(["sa"])
+        assert regions[places.qualifiers.region_ids[places.qualifiers.region_keys.index("sacatepequez")]] is False
+        # Its region's name and GeoNames' own code still match.
+        for q in ["Santiago Sacatepéquez, Sacatepéquez", "Santiago Sacatepequez 17", "Santiago Sacatepéquez, Sacatepéquez, Guatemala"]:
+            assert [p["name"] for p in places.search(q)] == ["Santiago Sacatepéquez"], q
+
+    def test_without_boundaries_there_are_none(self, geonames_dir: Path):
+        p = Places.load(geonames_dir)
+        assert p.search("Vancouver, BC") == []
+        assert [p["admin1"] for p in p.search("Vancouver, British Columbia")] == ["British Columbia"]
+
+    @pytest.mark.parametrize("polygons", [
+        # One GeoNames code, polygons with different ISO codes: many to one, like UK councils.
+        [("CA", "CA.02", "British Columbia", "", _box(-125, 48, -120, 51), "CA-BC"),
+         ("CA", "CA.02", "Vancouver Island", "", _box(-128, 48, -125, 51), "CA-VI")],
+        # A stale GeoNames code: CA.07 is Nova Scotia, not this polygon.
+        [("CA", "CA.07", "British Columbia", "", _box(-125, 48, -120, 51), "CA-BC")],
+        # The ISO code is another country's.
+        [("CA", "CA.02", "British Columbia", "", _box(-125, 48, -120, 51), "US-BC")],
+        # Numbers and single letters.
+        [("CA", "CA.02", "British Columbia", "", _box(-125, 48, -120, 51), "CA-59")],
+        [("CA", "CA.02", "British Columbia", "", _box(-125, 48, -120, 51), "CA-B")],
+        # No GeoNames code or a placeholder ISO code.
+        [("CA", "-1", "British Columbia", "", _box(-125, 48, -120, 51), "CA-BC")],
+        [("CA", "CA.02", "British Columbia", "", _box(-125, 48, -120, 51), "CA-X1~")],
+    ])
+    def test_unusable_codes_are_skipped(self, geonames_dir: Path, tmp_path: Path, polygons):
+        p = places_with(geonames_dir, tmp_path, polygons)
+        assert p._region_abbreviations() == {}
+        assert p.search("Vancouver, BC") == []
+
+    def test_one_abbreviation_for_two_regions_names_both(self, geonames_dir: Path, tmp_path: Path):
+        p = places_with(geonames_dir, tmp_path, [
+            ("AU", "AU.02", "New South Wales", "", _box(150, -35, 152, -32), "AU-NSW"),
+            ("AU", "AU.01", "Australian Capital Territory", "", _box(148, -36, 149.5, -35), "AU-NSW"),
+        ])
+        regions, _ = p.qualifiers.match(["nsw"])
+        assert {p.qualifiers.region_keys[p.qualifiers.region_ids.index(r)] for r in regions} == {
+            "new south wales", "australian capital territory"}
+
+    def test_never_takes_a_code_geonames_gives_another_region(self, geonames_dir: Path, tmp_path: Path):
+        # US-MN on Oregon's polygon: "MN" stays Minnesota's alone.
+        p = places_with(geonames_dir, tmp_path, [("US", "US.OR", "Oregon", "", _box(-124, 42, -117, 46), "US-MN")])
+        assert p._region_abbreviations() == {"US.OR": "MN"}
+        assert p.search("Portland, MN") == []
+        assert [r["admin1"] for r in p.search("Portland, OR")] == ["Oregon"]
 
 
 def test_cache_is_used_and_rebuilt_when_stale(tmp_path: Path):

@@ -12,6 +12,7 @@ GeoNames' (UK councils, Italian provinces) and some of its GeoNames admin1 codes
 """
 
 import logging
+import re
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +27,9 @@ BOUNDARIES_FILE = "ne_10m_admin_1_states_provinces.shp"
 SNAP_DEG = 0.25
 # The polygon's names, for checking its GeoNames admin1 code against the region GeoNames gives it.
 NAME_FIELDS = ("name", "name_en", "name_alt")  # not gn_name: it is derived from the code
+# An ISO 3166-2 region code: the country and up to three letters or digits ("CA-BC", "AU-NSW").
+# Natural Earth also has placeholders ("AU-X02~", "-99"), which don't match.
+ISO_3166_2 = re.compile(r"[A-Z]{2}-[A-Z0-9]{1,3}")
 
 
 def _country_code(iso_a2: str, gn_a1_code: str) -> str | None:
@@ -44,7 +48,8 @@ def _points(lat, lon) -> np.ndarray:
 
 class Boundaries:
     """Admin-1 polygons, each with Natural Earth's country code (None where it has none), its
-    GeoNames admin1 code ("US.CA"; None where it has none) and its names."""
+    GeoNames admin1 code ("US.CA"; None where it has none), its names, and its ISO 3166-2 code
+    ("US-CA"; None where it has none), which search uses as an abbreviation of the region."""
 
     def __init__(
         self,
@@ -52,11 +57,14 @@ class Boundaries:
         country_codes: list[str | None],
         admin1_codes: list[str | None],
         names: list[tuple[str, ...]],
+        iso_codes: list[str | None] | None = None,
     ):
-        assert len(polygons) == len(country_codes) == len(admin1_codes) == len(names)
+        iso_codes = iso_codes if iso_codes is not None else [None] * len(polygons)
+        assert len(polygons) == len(country_codes) == len(admin1_codes) == len(names) == len(iso_codes)
         self.country_codes = country_codes
         self.admin1_codes = admin1_codes
         self.names = names
+        self.iso_codes = iso_codes
         self.tree = shapely.STRtree(polygons)
 
     def __len__(self) -> int:
@@ -69,11 +77,12 @@ class Boundaries:
         if not path.is_file():
             log.warning("%s missing: place labels won't say which country or region a point is in", path)
             return None
-        polygons, country_codes, admin1_codes, names = [], [], [], []
+        polygons, country_codes, admin1_codes, names, iso_codes = [], [], [], [], []
         with shapefile.Reader(path) as reader:
             fields = {f[0] for f in reader.fields[1:]}
             name_fields = [f for f in NAME_FIELDS if f in fields]
-            for sr in reader.iterShapeRecords(fields=["iso_a2", "gn_a1_code", *name_fields]):
+            iso_field = ["iso_3166_2"] if "iso_3166_2" in fields else []
+            for sr in reader.iterShapeRecords(fields=["iso_a2", "gn_a1_code", *iso_field, *name_fields]):
                 if not sr.shape.points:
                     continue
                 iso_a2, gn_a1_code = sr.record["iso_a2"] or "", sr.record["gn_a1_code"] or ""
@@ -82,7 +91,9 @@ class Boundaries:
                 admin1_codes.append(gn_a1_code if "." in gn_a1_code else None)
                 spelled = (n for f in name_fields for n in (sr.record[f] or "").split("|"))
                 names.append(tuple(dict.fromkeys(n.strip() for n in spelled if n.strip())))
-        return cls(polygons, country_codes, admin1_codes, names)
+                iso = (sr.record["iso_3166_2"] or "").strip() if iso_field else ""
+                iso_codes.append(iso if ISO_3166_2.fullmatch(iso) else None)
+        return cls(polygons, country_codes, admin1_codes, names, iso_codes)
 
     def polygon_at(self, lat: float, lon: float) -> int | None:
         """The polygon (lat, lon) is in, else the nearest within SNAP_DEG, else None (open sea)."""

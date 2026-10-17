@@ -162,20 +162,39 @@ Place names are optional: when the server has no GeoNames data, every `place` is
 Autocomplete for the search box.
 - Matching is case- and accent-insensitive. The query is the start of a place's
   name or ASCII name (or, for cities of 100,000+, any of its GeoNames alternate
-  names: other languages, former names, `"NYC"`, airport codes like `"PDX"`),
+  names: other languages, former names, `"NYC"`, airport codes like `"PDX"`; only
+  once the name typed is 3+ characters),
   optionally followed by its **region and/or country**, with or without commas:
   `"Portland, Oregon"`, `"portland or"`, `"Paris France"`,
   `"Portland, Oregon, United States"`. So a result's own `label` finds it again.
   - A region is its GeoNames admin1 name or code (US states' postal codes,
-    `"ENG"`; many countries' codes are only numbers). A country is its name, ISO
+    `"ENG"`; many countries' codes are only numbers), or, with the boundary data
+    loaded, its ISO 3166-2 code from Natural Earth (`"BC"`, `"NSW"`, `"QC"`) where
+    that is consistent: every polygon with the region's GeoNames code has the same
+    ISO code, at least one is named as GeoNames names the region, the code has 2+
+    characters and a letter, and GeoNames doesn't give it to another region of the
+    country. None in countries whose regions labels hide (`REGIONLESS_COUNTRIES`:
+    Colombia, Guatemala, Nigeria, ...), whose codes nobody types; their region names
+    and GeoNames codes still match. A code for several regions names each of them. A country is its name, ISO
     alpha-2 or alpha-3 code (`"US"`, `"USA"`), or its internet domain where no other
     country shares it (`"UK"`). Region before country when both are given.
   - The last name may be unfinished, as while typing (`"Portland, Ore"`); codes
     must be whole.
   A query of 2+ characters is required, otherwise the result is `[]`.
-- Results are sorted by: the whole name before only its start; a place's own name
-  before an alternate one; a region or country named whole before only its start
-  (`"Cambridge, MA"`: Massachusetts before Maryland); then population, descending.
+- Results are sorted by population, descending, where a place whose own name is
+  the whole name typed counts 10× its population (`"Porto"`: Porto, 250k, before
+  Porto Alegre, 1.4M), a match by alternate name ÷10 (`"Salem"`: the Salems before
+  Jerusalem, also "Salem" in GeoNames; `"Mexico"`: Mexico City first), and a place
+  whose region or country the qualifier names whole (all of its name, or a code)
+  10× (`"Cambridge, MA"`: Massachusetts before Maryland). A whole qualifier is only
+  a boost, not first outright, so a code doesn't beat someone still typing a
+  region's name (`"Santiago, Sa"`: Santiago, Chile, in Santiago Metropolitan). A
+  qualifier typed as 2–3 capitals (`CODE_LETTERS`) is a code: it matches only what
+  it names whole, if anything, so `"Valencia, CA"` is Valencia, California, while
+  `"Valencia, Ca"` also matches the start of Carabobo, and Valencia, Venezuela (1.6M)
+  comes first. All three factors are subjective (`WHOLE_NAME_BOOST`,
+  `ALIAS_DISCOUNT` and `WHOLE_QUALIFIER_BOOST` in `places.py`). Ties go to the better
+  name match, then a whole qualifier.
 - Returns `[{name, admin1, country, country_code, population, lat, lon, base_label, label}]`.
   Here `label` (equal to `base_label`) is `"Porto Alegre, Rio Grande do Sul, Brazil"` style, with duplicates
   dropped as above (so Porto, whose admin1 is also "Porto", is `"Porto, Portugal"`).
