@@ -30,5 +30,9 @@ climate-twins-serve = "climate_twins.server:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# The web UI's bundle (`pnpm build`) is gitignored, which hatch would otherwise leave out.
+[tool.hatch.build]
+artifacts = ["climate_twins/static/app.*", "climate_twins/static/maplibre-gl-*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

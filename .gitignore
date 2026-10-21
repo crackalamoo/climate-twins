@@ -4,3 +4,6 @@ __pycache__/
 .pytest_cache/
 data/
 logs/
+node_modules/
+climate_twins/static/app.*
+climate_twins/static/maplibre-gl-*

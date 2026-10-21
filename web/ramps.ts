@@ -2,8 +2,10 @@
 // colormap.ts and precipitationColormap.ts) so the two projects read alike. Both interpolate in RGB.
 // Here they are the strips beside the comparison charts' y axes.
 
+export type Stop = [number, number[]];
+
 /** Temperature (°C) stops. The step at 0 °C is deliberate: freezing reads as a visible break. */
-export const TEMP_STOPS = [
+export const TEMP_STOPS: Stop[] = [
   [-30, [59, 30, 109]],
   [-15, [11, 30, 109]],
   [0, [30, 136, 229]],
@@ -17,7 +19,7 @@ export const TEMP_STOPS = [
 ];
 
 /** Precipitation (mm/day) stops: dry tan, through greens, to wet deep blue. */
-export const PRECIP_STOPS = [
+export const PRECIP_STOPS: Stop[] = [
   [0, [210, 200, 180]],
   [1, [180, 210, 170]],
   [3, [100, 190, 120]],
@@ -28,11 +30,11 @@ export const PRECIP_STOPS = [
 
 export const DAYS_PER_MONTH = 30.44;
 
-function hex(rgb) {
+function hex(rgb: number[]) {
   return `#${rgb.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("")}`;
 }
 
-function interpolate(stops, value) {
+function interpolate(stops: Stop[], value: number) {
   if (value <= stops[0][0]) return stops[0][1];
   for (let i = 1; i < stops.length; i++) {
     const [v1, c1] = stops[i];
@@ -42,19 +44,19 @@ function interpolate(stops, value) {
       return c0.map((c, k) => c + f * (c1[k] - c));
     }
   }
-  return stops.at(-1)[1];
+  return stops.at(-1)![1];
 }
 
 /**
  * Gradient stops [offset 0-1, colour] for `stops` over a vertical span from `top` (offset 0) down to
  * `bottom` (offset 1), both in the stops' units. Keeps the ramp's own stops (and any hard step) inside.
  */
-export function gradientStops(stops, top, bottom) {
-  const offset = (v) => (top - v) / (top - bottom);
+export function gradientStops(stops: Stop[], top: number, bottom: number): [number, string][] {
+  const offset = (v: number) => (top - v) / (top - bottom);
   const inside = stops.filter(([v]) => v < top && v > bottom).reverse(); // top (high) to bottom (low)
   return [
     [0, hex(interpolate(stops, top))],
-    ...inside.map(([v, rgb]) => [offset(v), hex(rgb)]),
+    ...inside.map(([v, rgb]): [number, string] => [offset(v), hex(rgb)]),
     [1, hex(interpolate(stops, bottom))],
   ];
 }

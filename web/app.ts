@@ -2,22 +2,24 @@
 // Query state lives in the URL (?lat&lon&exclude&suppress&align); the display units (units.js)
 // live only in memory.
 
+import "maplibre-gl/dist/maplibre-gl.css";
 import { ClimateMap, matchColors, renderLegend } from "./map.js";
 import { escapeHtml, renderComparison, statsHtml } from "./charts.js";
 import { fmtDistance, setUnits, units } from "./units.js";
+import type { Cell, Legend, LegendStop, Match, Place, Ruler, SearchPlace, SimilarResponse } from "./api.js";
 
 const N_RESULTS = 20;
-const $ = (id) => document.getElementById(id);
+const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const ui = {
-  search: $("search"),
+  search: $<HTMLInputElement>("search"),
   suggestions: $("suggestions"),
   locate: $("locate"),
-  exclude: $("exclude"),
+  exclude: $<HTMLInputElement>("exclude"),
   excludeOut: $("exclude-out"),
-  suppress: $("suppress"),
+  suppress: $<HTMLInputElement>("suppress"),
   suppressOut: $("suppress-out"),
-  align: $("align"),
+  align: $<HTMLInputElement>("align"),
   adjust: $("adjust"),
   units: $("units"),
   message: $("message"),
@@ -27,11 +29,12 @@ const ui = {
   compare: $("compare"),
   legend: $("legend"),
 };
+const resultRows = () => ui.results.children as HTMLCollectionOf<HTMLLIElement>;
 
-let current = null; // last successful /similar response
-let queryPoint = null; // {lat, lon} of the last requested query
-let selectedRank = null;
-let queryAbort = null;
+let current: SimilarResponse | null = null; // last successful /similar response
+let queryPoint: { lat: number; lon: number } | null = null; // {lat, lon} of the last requested query
+let selectedRank: number | null = null;
+let queryAbort: AbortController | null = null;
 
 const map = new ClimateMap("map", {
   onClick: (lat, lon) => runQuery(lat, lon),
@@ -42,14 +45,14 @@ const map = new ClimateMap("map", {
 
 // ---------------------------------------------------------------- formatting
 
-function fmtCoord(lat, lon) {
+function fmtCoord(lat: number, lon: number) {
   const ns = lat >= 0 ? "N" : "S";
   const ew = lon >= 0 ? "E" : "W";
   return `${fmtDegMin(lat)} ${ns}, ${fmtDegMin(lon)} ${ew}`;
 }
 
 /** |deg| as degrees and whole minutes, "45°31′": a minute (~2 km) is finer than the ~4 km grid. */
-function fmtDegMin(deg) {
+function fmtDegMin(deg: number) {
   const minutes = Math.round(Math.abs(deg) * 60);
   return `${Math.floor(minutes / 60)}°${String(minutes % 60).padStart(2, "0")}′`;
 }
@@ -58,9 +61,8 @@ function fmtDegMin(deg) {
  * A Place label (docs/api.md) in the active units, rebuilt from its structured fields. With
  * `in_area` (the point is across a border from the city), an exact-tier city is only "near".
  */
-function placeLabel(place, cell) {
+function placeLabel(place: Place | null, cell: Cell) {
   if (!place) return fmtCoord(cell.lat, cell.lon);
-  if (!place.tier) return place.label; // no structured fields: only the metric string
   if (place.tier === "region") return `in ${place.base_label}`;
   const where = place.in_area ? `, in ${place.in_area}` : "";
   if (place.tier === "exact") return place.in_area ? `near ${place.base_label}${where}` : place.base_label;
@@ -73,9 +75,8 @@ function placeLabel(place, cell) {
  * The second line is where the point is (the city's region and country, or `in_area` when the point
  * is across a border from it), or null when there's nothing to add.
  */
-function placeLines(place, cell) {
+function placeLines(place: Place | null, cell: Cell): [string, string | null] {
   if (!place) return [fmtCoord(cell.lat, cell.lon), null];
-  if (!place.tier) return [place.label, null];
   const { name, base_label: base, in_area: inArea } = place;
   // base_label is "name, region, country" (or just the name with in_area); keep it whole if it isn't
   const [city, rest] = base.startsWith(`${name}, `) ? [name, base.slice(name.length + 2)] : [base, null];
@@ -87,7 +88,7 @@ function placeLines(place, cell) {
 }
 
 /** A place label's two lines (placeLines) as HTML. */
-function placeLinesHtml(place, cell) {
+function placeLinesHtml(place: Place | null, cell: Cell) {
   const [primary, secondary] = placeLines(place, cell);
   return `<span class="primary">${escapeHtml(primary)}</span>${secondary ? `<span class="secondary">${escapeHtml(secondary)}</span>` : ""}`;
 }
@@ -96,19 +97,19 @@ function placeLinesHtml(place, cell) {
  * A short name for a place: the city if the point is in or near it; else the point's own region where
  * labels show it, else its own country (from `area`, as the labelling city can be across a border).
  */
-function shortPlaceName(place) {
-  if (!place?.tier) return null;
+function shortPlaceName(place: Place | null) {
+  if (!place) return null;
   if (place.tier === "exact" || place.tier === "near") return place.name;
   const { admin1, country } = place.area ?? {};
   return admin1 ?? country ?? null;
 }
 
 /** "Portland" -> "Portland's", "Brussels" -> "Brussels'". */
-const possessive = (name) => (/s$/i.test(name) ? `${name}'` : `${name}'s`);
+const possessive = (name: string) => (/s$/i.test(name) ? `${name}'` : `${name}'s`);
 
 /** The query's own name, for "Portland's climate", only when it's in or near a city ("97 km NW of
  * Cairns" isn't Cairns); else null, and callers say "your spot". */
-function queryName(place) {
+function queryName(place: Place | null) {
   return place?.tier === "exact" || place?.tier === "near" ? place.name : null;
 }
 
@@ -117,7 +118,7 @@ function queryName(place) {
  * city in the response's `ruler`), as {text, title}: "Closer to Portland's climate than Seattle
  * is", with the numbers behind it in `title`. Null when there's nothing to compare with.
  */
-function rulerLine(match, ruler, queryPlace) {
+function rulerLine(match: Match, ruler: Ruler, queryPlace: Place | null) {
   const cmp = match.ruler_comparison;
   if (!cmp) return null;
   const name = queryName(queryPlace);
@@ -139,13 +140,13 @@ function rulerLine(match, ruler, queryPlace) {
 }
 
 /** A slider's km value (the input's string), to the nearest 10 mi in US units. */
-function fmtSliderKm(km) {
+function fmtSliderKm(km: string) {
   return fmtDistance(Number(km), { step: units() === "us" ? 10 : 1 });
 }
 
 // ---------------------------------------------------------------- messages
 
-function showMessage(text, kind = "error") {
+function showMessage(text: string, kind = "error") {
   ui.message.textContent = text;
   ui.message.className = `message ${kind === "info" ? "info" : ""}`;
   ui.message.hidden = false;
@@ -165,13 +166,13 @@ function params() {
   };
 }
 
-function updateUrl(lat, lon) {
+function updateUrl(lat: number, lon: number) {
   const p = params();
   const qs = new URLSearchParams({
     lat: lat.toFixed(4),
     lon: lon.toFixed(4),
-    exclude: p.exclude,
-    suppress: p.suppress,
+    exclude: String(p.exclude),
+    suppress: String(p.suppress),
     align: p.align,
   });
   history.replaceState(null, "", `?${qs}`);
@@ -182,16 +183,16 @@ function updateUrl(lat, lon) {
  * star and all the matches (`fit`): "always" for a new place, "ifHidden" when a slider changes which
  * matches a place has (move only if one is out of view), "never" to leave the camera be.
  */
-async function runQuery(lat, lon, { fit = "always" } = {}) {
+async function runQuery(lat: number, lon: number, { fit = "always" } = {}) {
   queryAbort?.abort();
   const abort = (queryAbort = new AbortController());
   const p = params();
   const qs = new URLSearchParams({
     lat: lat.toFixed(4),
     lon: lon.toFixed(4),
-    n: N_RESULTS,
-    exclude_km: p.exclude,
-    suppress_km: p.suppress,
+    n: String(N_RESULTS),
+    exclude_km: String(p.exclude),
+    suppress_km: String(p.suppress),
     align: p.align,
     detail: "true",
   });
@@ -200,8 +201,8 @@ async function runQuery(lat, lon, { fit = "always" } = {}) {
   try {
     res = await fetch(`/similar?${qs}`, { signal: abort.signal });
   } catch (err) {
-    if (err.name === "AbortError") return;
-    showMessage(`Couldn't reach the server: ${err.message}`);
+    if ((err as Error).name === "AbortError") return;
+    showMessage(`Couldn't reach the server: ${(err as Error).message}`);
     return;
   }
   if (res.status === 404) {
@@ -213,13 +214,13 @@ async function runQuery(lat, lon, { fit = "always" } = {}) {
     );
     return;
   }
-  let data;
+  let data: SimilarResponse;
   try {
     if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText);
     data = await res.json();
   } catch (err) {
     if (abort.signal.aborted) return;
-    showMessage(`Query failed: ${err.message}`);
+    showMessage(`Query failed: ${(err as Error).message}`);
     return;
   }
   if (abort.signal.aborted) return;
@@ -232,7 +233,7 @@ async function runQuery(lat, lon, { fit = "always" } = {}) {
   queryPoint = { lat, lon };
   updateUrl(lat, lon);
   const pinned = render(data);
-  map.setHeatmap({ lat: lat.toFixed(4), lon: lon.toFixed(4), align: p.align, exclude_km: p.exclude });
+  map.setHeatmap({ lat: lat.toFixed(4), lon: lon.toFixed(4), align: p.align, exclude_km: String(p.exclude) });
   if (fit === "never") return;
   await pinned;
   if (!abort.signal.aborted) map.fitResults({ ifHidden: fit === "ifHidden" });
@@ -241,7 +242,7 @@ async function runQuery(lat, lon, { fit = "always" } = {}) {
 // ---------------------------------------------------------------- rendering
 
 /** Show a /similar response in the panel and on the map; resolves once the pins are on the map. */
-function render(data) {
+function render(data: SimilarResponse) {
   const q = data.query;
   const colors = matchColors(data.matches, heatStops);
   ui.empty.hidden = true;
@@ -260,8 +261,8 @@ function render(data) {
   }
   for (const m of data.matches) {
     const li = document.createElement("li");
-    li.dataset.rank = m.rank;
-    li.style.setProperty("--rank-color", colors.get(m.rank)); // the heatmap's colour at its similarity
+    li.dataset.rank = String(m.rank);
+    li.style.setProperty("--rank-color", colors.get(m.rank)!); // the heatmap's colour at its similarity
     const shift = m.seasons_shifted_6_months
       ? ` <span class="shift" title="Seasons shifted 6 months: its climate matches the query's six months later (e.g. the other hemisphere)">⇄</span>`
       : "";
@@ -289,7 +290,8 @@ function render(data) {
   return pinned;
 }
 
-function showComparison(match) {
+function showComparison(match: Match) {
+  if (!current) return;
   const labels = {
     query: placeLabel(current.query.place, current.query.cell),
     queryName: shortPlaceName(current.query.place),
@@ -303,23 +305,23 @@ function showComparison(match) {
 }
 
 // Redraw the charts when the panel's width changes (a phone rotating, a window resized).
-let comparedWidth = null;
+let comparedWidth: number | null = null;
 new ResizeObserver(() => {
   const match = current?.matches.find((m) => m.rank === selectedRank);
   if (match && !ui.compare.hidden && ui.compare.clientWidth !== comparedWidth) showComparison(match);
 }).observe(ui.compare);
 
-function hover(rank) {
+function hover(rank: number | null) {
   map.markMatch("hover", rank);
-  for (const li of ui.results.children) li.classList.toggle("hover", Number(li.dataset.rank) === rank);
+  for (const li of resultRows()) li.classList.toggle("hover", Number(li.dataset.rank) === rank);
 }
 
-function select(rank) {
+function select(rank: number) {
   const match = current?.matches.find((m) => m.rank === rank);
   if (!match) return;
   selectedRank = rank;
   map.markMatch("selected", rank);
-  for (const li of ui.results.children) {
+  for (const li of resultRows()) {
     const on = Number(li.dataset.rank) === rank;
     li.classList.toggle("selected", on);
     if (on) li.scrollIntoView({ block: "nearest" });
@@ -331,9 +333,9 @@ function select(rank) {
 
 // ---------------------------------------------------------------- search box
 
-let searchAbort = null;
-let searchTimer = null;
-let suggestions = [];
+let searchAbort: AbortController | null = null;
+let searchTimer: number | undefined;
+let suggestions: SearchPlace[] = [];
 let active = -1;
 
 function closeSuggestions() {
@@ -343,7 +345,7 @@ function closeSuggestions() {
   active = -1;
 }
 
-function showSuggestions(items) {
+function showSuggestions(items: SearchPlace[]) {
   suggestions = items;
   active = items.length ? 0 : -1;
   ui.suggestions.innerHTML = "";
@@ -370,7 +372,7 @@ function highlightActive() {
   [...ui.suggestions.children].forEach((li, i) => li.setAttribute("aria-selected", String(i === active)));
 }
 
-function choose(i) {
+function choose(i: number) {
   const p = suggestions[i];
   if (!p) return;
   ui.search.value = p.label;
@@ -378,16 +380,16 @@ function choose(i) {
   runQuery(p.lat, p.lon);
 }
 
-async function fetchSuggestions(q) {
+async function fetchSuggestions(q: string) {
   searchAbort?.abort();
   const abort = (searchAbort = new AbortController());
   try {
-    const res = await fetch(`/places/search?${new URLSearchParams({ q, limit: 8 })}`, { signal: abort.signal });
+    const res = await fetch(`/places/search?${new URLSearchParams({ q, limit: "8" })}`, { signal: abort.signal });
     if (!res.ok) throw new Error(res.statusText);
-    const items = await res.json();
+    const items: SearchPlace[] = await res.json();
     if (!abort.signal.aborted && ui.search.value.trim() === q) showSuggestions(items);
   } catch (err) {
-    if (err.name !== "AbortError") showMessage(`Place search failed: ${err.message}`);
+    if ((err as Error).name !== "AbortError") showMessage(`Place search failed: ${(err as Error).message}`);
   }
 }
 
@@ -447,7 +449,7 @@ ui.adjust.addEventListener("click", () => {
 for (const [input, out] of [
   [ui.exclude, ui.excludeOut],
   [ui.suppress, ui.suppressOut],
-]) {
+] as const) {
   input.addEventListener("input", () => (out.textContent = fmtSliderKm(input.value)));
   input.addEventListener("change", () => queryPoint && runQuery(queryPoint.lat, queryPoint.lon, { fit: "ifHidden" }));
 }
@@ -462,7 +464,7 @@ function showUnits() {
 
 // Switching units re-renders the last response (keeping the selection) without refetching.
 ui.units.addEventListener("click", (e) => {
-  const value = e.target.closest("button")?.dataset.units;
+  const value = (e.target as Element).closest("button")?.dataset.units;
   if (!value || value === units()) return;
   setUnits(value);
   showUnits();
@@ -475,7 +477,7 @@ ui.units.addEventListener("click", (e) => {
   if (match) {
     selectedRank = rank;
     map.markMatch("selected", rank);
-    for (const li of ui.results.children) li.classList.toggle("selected", Number(li.dataset.rank) === rank);
+    for (const li of resultRows()) li.classList.toggle("selected", Number(li.dataset.rank) === rank);
     showComparison(match);
   }
 });
@@ -484,11 +486,11 @@ ui.units.addEventListener("click", (e) => {
 
 function initFromUrl() {
   const u = new URLSearchParams(location.search);
-  const num = (k) => (u.has(k) && u.get(k) !== "" && Number.isFinite(Number(u.get(k))) ? Number(u.get(k)) : null);
+  const num = (k: string) => (u.has(k) && u.get(k) !== "" && Number.isFinite(Number(u.get(k))) ? Number(u.get(k)) : null);
   const exclude = num("exclude");
   const suppress = num("suppress");
-  if (exclude !== null) ui.exclude.value = exclude;
-  if (suppress !== null) ui.suppress.value = suppress;
+  if (exclude !== null) ui.exclude.value = String(exclude);
+  if (suppress !== null) ui.suppress.value = String(suppress);
   showUnits();
   if (u.has("align")) ui.align.checked = u.get("align") !== "calendar";
 
@@ -498,10 +500,10 @@ function initFromUrl() {
 }
 
 // The heatmap's colour stops, which also colour the results' ranks (null: they fall back to one colour).
-let heatStops = null;
+let heatStops: LegendStop[] | null = null;
 const legendReady = fetch("/heatmap/legend")
   .then((res) => (res.ok ? res.json() : Promise.reject(new Error(res.statusText))))
-  .then((legend) => {
+  .then((legend: Legend) => {
     heatStops = legend.stops;
     renderLegend(ui.legend, legend.stops, legend.excluded);
   })

@@ -1,6 +1,14 @@
 // Map: basemap, similarity heatmap tiles, query star and numbered match pins.
 
-import { Map, Marker, NavigationControl, Popup } from "https://cdn.jsdelivr.net/npm/maplibre-gl@6.12.0/dist/maplibre-gl.mjs";
+import type { ExpressionSpecification, LayerSpecification } from "@maplibre/maplibre-gl-style-spec";
+import {
+  type GeoJSONSource, Map, type MapGeoJSONFeature, type MapMouseEvent, Marker, NavigationControl, type PointLike, Popup,
+  setWorkerUrl,
+} from "maplibre-gl";
+import type { Legend, LegendStop, Match } from "./api.js";
+
+// MapLibre looks for its worker beside its own module; the build bundles it beside app.js instead.
+setWorkerUrl(new URL("maplibre-gl-worker.js", import.meta.url).href);
 
 // A printed-atlas basemap, set in Libre Caslon, on OpenFreeMap's vector tiles.
 const STYLE = "atlas/style.json";
@@ -16,9 +24,9 @@ const LABELS = "match-labels";
 const FALLBACK_INK = "#540d6e"; // the heatmap's strongest stop, if the legend didn't load
 
 /** The heatmap's colour (opaque) at `topPct`, interpolated in log10(top %) like tiles.py. */
-function heatColor(topPct, stops) {
+function heatColor(topPct: number, stops: LegendStop[]) {
   const s = [...stops].sort((a, b) => b.top_pct - a.top_pct); // 5% (faint) -> 0.01% (strong)
-  const t = Math.log10(Math.min(Math.max(topPct, s.at(-1).top_pct), s[0].top_pct));
+  const t = Math.log10(Math.min(Math.max(topPct, s.at(-1)!.top_pct), s[0].top_pct));
   let i = 0;
   while (i < s.length - 2 && Math.log10(s[i + 1].top_pct) > t) i++;
   const lp = Math.log10(s[i].top_pct), lq = Math.log10(s[i + 1].top_pct);
@@ -28,9 +36,9 @@ function heatColor(topPct, stops) {
 }
 
 /** rank -> identifying colour for this result set (pins and the sidebar's rank numbers). */
-export function matchColors(matches, stops) {
-  const color = (m) => (stops ? heatColor(100 - m.more_similar_than_pct_of_land, stops) : FALLBACK_INK);
-  return new globalThis.Map(matches.map((m) => [m.rank, color(m)]));
+export function matchColors(matches: Match[], stops: LegendStop[] | null) {
+  const color = (m: Match) => (stops ? heatColor(100 - m.more_similar_than_pct_of_land, stops) : FALLBACK_INK);
+  return new globalThis.Map<number, string>(matches.map((m) => [m.rank, color(m)]));
 }
 
 // #1-5 are discs of their rank colour ringed in paper; #6 onwards paper discs ringed in it, so the
@@ -39,29 +47,29 @@ const FILLED_RANKS = 5;
 const INK = "#2a2420";
 const PAPER = "#f7f1e3";
 
-function luminance(hex) {
+function luminance(hex: string) {
   const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
   const [r, g, b] = c.map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
 /** WCAG contrast ratio between two #rrggbb colours. */
-function contrast(a, b) {
+function contrast(a: string, b: string) {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
   return (hi + 0.05) / (lo + 0.05);
 }
 
 /** A filled pin's number: paper where legible (>= 4.5:1). A paper pin's number: its ring colour where legible. Else ink. */
-function numberColor(color, filled) {
+function numberColor(color: string, filled: boolean) {
   const legible = contrast(color, PAPER) >= 4.5;
   if (filled) return legible ? PAPER : INK;
   return legible ? color : INK;
 }
 
 // A pin's rank (a merged pin is its best match's).
-const RANK = ["get", "rank"];
-const FILLED = ["<=", RANK, FILLED_RANKS];
-const SORT = ["-", 0, RANK]; // best ranks draw on top
+const RANK: ExpressionSpecification = ["get", "rank"];
+const FILLED: ExpressionSpecification = ["<=", RANK, FILLED_RANKS];
+const SORT: ExpressionSpecification = ["-", 0, RANK]; // best ranks draw on top
 
 // Pins whose centres are closer than this (px) would overlap, so the worse one merges into the better.
 const MERGE_PX = 26;
@@ -76,14 +84,36 @@ const FAR_MS = 1000; // a fixed length: flyTo's speed-based ones run 2 s+ on a p
 const FIT_MS = 1000;
 const FIT_MAX_ZOOM = 5;
 
+interface Point {
+  rank: number;
+  color: string;
+  lon: number;
+  lat: number;
+  xy: [number, number];
+}
+
+interface Pin {
+  lead: Point;
+  members: Point[];
+}
+
+type Padding = Record<"top" | "bottom" | "left" | "right", number>;
+
+interface Options {
+  onClick: (lat: number, lon: number) => void;
+  onMarkerClick: (rank: number) => void;
+  onMarkerHover: (rank: number | null) => void;
+  overlays?: HTMLElement[];
+}
+
 /** Web Mercator position in [0, 1] world units. */
-function mercator(lon, lat) {
+function mercator(lon: number, lat: number): [number, number] {
   const y = Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
   return [(lon + 180) / 360, 0.5 - y / (2 * Math.PI)];
 }
 
 /** Screen distance (px) between two matches at `zoom`, taking the shorter way round the world. */
-function pixelDistance(a, b, zoom) {
+function pixelDistance(a: Pick<Point, "xy">, b: Pick<Point, "xy">, zoom: number) {
   const dx = Math.abs(a.xy[0] - b.xy[0]);
   return Math.hypot(Math.min(dx, 1 - dx), a.xy[1] - b.xy[1]) * 512 * 2 ** zoom;
 }
@@ -92,9 +122,9 @@ function pixelDistance(a, b, zoom) {
  * [west, east] of the narrowest span of longitude holding all `lons`: everything but the widest gap
  * between neighbours, which may be the one across the antimeridian or not (then east > 180).
  */
-function lonSpan(lons) {
+function lonSpan(lons: number[]) {
   const s = [...lons].sort((a, b) => a - b);
-  let [west, east, gap] = [s[0], s.at(-1), s[0] + 360 - s.at(-1)];
+  let [west, east, gap] = [s[0], s.at(-1)!, s[0] + 360 - s.at(-1)!];
   for (let i = 1; i < s.length; i++) {
     if (s[i] - s[i - 1] > gap) [west, east, gap] = [s[i], s[i - 1] + 360, s[i] - s[i - 1]];
   }
@@ -106,8 +136,8 @@ function lonSpan(lons) {
  * would overlap, else becomes a pin itself. A merged pin stays at its best match's real location.
  * Returns [{ lead, members }], members including lead, both in rank order.
  */
-function mergePins(points, zoom) {
-  const pins = [];
+function mergePins(points: Point[], zoom: number) {
+  const pins: Pin[] = [];
   for (const p of points) {
     const pin = pins.find((q) => pixelDistance(q.lead, p, zoom) < MERGE_PX);
     if (pin) pin.members.push(p);
@@ -116,7 +146,7 @@ function mergePins(points, zoom) {
   return pins;
 }
 
-function pinFeature({ lead, members }) {
+function pinFeature({ lead, members }: Pin): GeoJSON.Feature<GeoJSON.Point> {
   return {
     type: "Feature",
     geometry: { type: "Point", coordinates: [lead.lon, lead.lat] },
@@ -132,22 +162,22 @@ function pinFeature({ lead, members }) {
 }
 
 /** Pin radius, growing mildly with zoom and when `marked`. */
-function pinRadius(marked) {
-  const r = (base) => ["+", base, ["case", marked, 2, 0]];
+function pinRadius(marked: ExpressionSpecification | boolean): ExpressionSpecification {
+  const r = (base: number): ExpressionSpecification => ["+", base, ["case", marked, 2, 0]];
   return ["interpolate", ["linear"], ["zoom"], 1, r(10), 6, r(12)];
 }
 
 /** A paper ring around a `marked` (hovered or selected) pin, edged in ink (more firmly when selected). */
-function haloRadius() {
+function haloRadius(): ExpressionSpecification {
   return ["interpolate", ["linear"], ["zoom"], 1, 16, 6, 18];
 }
 
-function haloOpacity(marked) {
+function haloOpacity(marked: ExpressionSpecification | boolean): ExpressionSpecification {
   return ["case", marked, 0.92, 0];
 }
 
 /** Pins: halo (highlight ring), disc and rank number. */
-function matchLayers() {
+function matchLayers(): LayerSpecification[] {
   return [
     {
       id: HALO,
@@ -192,8 +222,22 @@ function matchLayers() {
 }
 
 export class ClimateMap {
+  map: Map;
+  loaded: Promise<unknown>;
+  onMarkerClick: Options["onMarkerClick"];
+  onMarkerHover: Options["onMarkerHover"];
+  queryMarker: Marker | null;
+  queryPoint: { lat: number; lon: number } | null;
+  overlays: HTMLElement[];
+  marks: Record<"hover" | "selected", number | null>;
+  hoverKey: string | null;
+  tip: Popup;
+  points?: Point[];
+  pins?: Pin[];
+  pinsKey?: string | null;
+
   /** `overlays`: elements of the page laid over the map (the legend), which fitResults keeps pins clear of. */
-  constructor(container, { onClick, onMarkerClick, onMarkerHover, overlays = [] }) {
+  constructor(container: string, { onClick, onMarkerClick, onMarkerHover, overlays = [] }: Options) {
     this.map = new Map({ container, style: STYLE, center: [0, 20], zoom: 1.3, attributionControl: { compact: true } });
     this.map.addControl(new NavigationControl({ showCompass: false }), "top-left");
     this.map.getCanvas().style.cursor = "crosshair";
@@ -214,7 +258,7 @@ export class ClimateMap {
   }
 
   /** Replace the heatmap with tiles for a new query (a fresh source so all tiles refetch). */
-  async setHeatmap(params) {
+  async setHeatmap(params: Record<string, string>) {
     await this.loaded;
     if (this.map.getLayer(HEATMAP)) this.map.removeLayer(HEATMAP);
     if (this.map.getSource(HEATMAP)) this.map.removeSource(HEATMAP);
@@ -233,7 +277,7 @@ export class ClimateMap {
     );
   }
 
-  setQuery(lat, lon) {
+  setQuery(lat: number, lon: number) {
     this.queryMarker?.remove();
     const el = document.createElement("div");
     el.className = "marker-query";
@@ -247,7 +291,7 @@ export class ClimateMap {
    * Show the matches as numbered pins in their `colors` (rank -> #rrggbb, from matchColors), merged
    * into the best-ranked one where they would overlap.
    */
-  async setMatches(matches, colors) {
+  async setMatches(matches: Match[], colors: ReadonlyMap<number, string>) {
     // New matches: the old highlights name ranks of the old ones. Cleared before the await, so a
     // caller can mark one of the new matches straight after (the units toggle keeps its selection).
     this.marks = { hover: null, selected: null };
@@ -275,7 +319,7 @@ export class ClimateMap {
     const key = this.pins.map((p) => p.members.map((m) => m.rank).join(",")).join(";");
     if (key === this.pinsKey) return;
     this.pinsKey = key;
-    this.map.getSource(MATCHES).setData({ type: "FeatureCollection", features: this.pins.map(pinFeature) });
+    this.map.getSource<GeoJSONSource>(MATCHES)!.setData({ type: "FeatureCollection", features: this.pins.map(pinFeature) });
   }
 
   addMatchLayers() {
@@ -286,7 +330,7 @@ export class ClimateMap {
   }
 
   /** Highlight ("hover" / "selected") the pin holding one match, its own or merged (or none). */
-  markMatch(kind, rank) {
+  markMatch(kind: "hover" | "selected", rank: number | null) {
     this.marks[kind] = rank;
     this.paintMarks();
   }
@@ -294,8 +338,8 @@ export class ClimateMap {
   paintMarks() {
     if (!this.map.getLayer(PINS)) return;
     const { hover, selected } = this.marks;
-    const has = (rank) => (rank == null ? false : ["in", `,${rank},`, ["get", "ranks"]]);
-    const marked = ["any", has(hover), has(selected)];
+    const has = (rank: number | null): ExpressionSpecification | false => (rank == null ? false : ["in", `,${rank},`, ["get", "ranks"]]);
+    const marked: ExpressionSpecification = ["any", has(hover), has(selected)];
     this.map.setPaintProperty(PINS, "circle-radius", pinRadius(marked));
     this.map.setPaintProperty(HALO, "circle-opacity", haloOpacity(marked));
     this.map.setPaintProperty(HALO, "circle-stroke-opacity", ["case", marked, 1, 0]);
@@ -303,13 +347,13 @@ export class ClimateMap {
   }
 
   /** The topmost (best-ranked) pin under a screen point, if any. */
-  matchAt(point) {
+  matchAt(point: PointLike): MapGeoJSONFeature | null {
     if (!this.map.getLayer(PINS)) return null;
     const hits = this.map.queryRenderedFeatures(point, { layers: [PINS] });
     return hits.sort((a, b) => a.properties.rank - b.properties.rank)[0] ?? null;
   }
 
-  handleClick(e, onClick) {
+  handleClick(e: MapMouseEvent, onClick: Options["onClick"]) {
     const feature = this.matchAt(e.point);
     if (!feature) onClick(e.lngLat.lat, e.lngLat.lng);
     else this.onMarkerClick(feature.properties.rank); // a merged pin is its best match's
@@ -320,15 +364,15 @@ export class ClimateMap {
    * possible: zoom in only as far as it takes to stand alone (no other match within MERGE_PX, so
    * anything merged into it splits off), and leave the camera be if it's already in view and alone.
    */
-  focusMatch(rank) {
+  focusMatch(rank: number) {
     const point = this.points?.find((p) => p.rank === rank);
     if (!point) return;
     const zoom = this.map.getZoom();
-    const nearest = Math.min(...this.points.filter((p) => p !== point).map((p) => pixelDistance(point, p, zoom)));
+    const nearest = Math.min(...this.points!.filter((p) => p !== point).map((p) => pixelDistance(point, p, zoom)));
     const alone = nearest < MERGE_PX ? zoom + Math.log2(MERGE_PX / Math.max(nearest, 1e-6)) + 0.1 : zoom;
     const target = Math.min(alone, this.map.getMaxZoom());
     if (target === zoom && this.inView(point)) return;
-    const camera = { center: [point.lon, point.lat], zoom: target, essential: true };
+    const camera = { center: [point.lon, point.lat] as [number, number], zoom: target, essential: true };
     const { lng, lat } = this.map.getCenter();
     const far = pixelDistance({ xy: mercator(lng, lat) }, point, zoom) > FAR_SCREENS * this.map.getContainer().clientWidth;
     if (far) this.map.flyTo({ ...camera, duration: FAR_MS });
@@ -339,7 +383,7 @@ export class ClimateMap {
    * Whether a point is on screen, `pad` px in from the edges (a pin's width by default), in the
    * copy of the world nearest the centre: the one pins and the star draw in.
    */
-  inView({ lon, lat }, pad = { top: MERGE_PX, bottom: MERGE_PX, left: MERGE_PX, right: MERGE_PX }) {
+  inView({ lon, lat }: { lon: number; lat: number }, pad: Padding = { top: MERGE_PX, bottom: MERGE_PX, left: MERGE_PX, right: MERGE_PX }) {
     const centre = this.map.getCenter().lng;
     const { x, y } = this.map.project([lon + 360 * Math.round((centre - lon) / 360), lat]);
     const { clientWidth: w, clientHeight: h } = this.map.getContainer();
@@ -351,7 +395,7 @@ export class ClimateMap {
    * the zoom buttons, the attribution and `overlays` (the legend). Each overlay is in a corner, so it
    * pads the top or bottom by as far as it reaches in.
    */
-  fitPadding() {
+  fitPadding(): Padding {
     const box = this.map.getContainer().getBoundingClientRect();
     const pad = { top: 0, bottom: 0, left: 0, right: 0 };
     for (const el of [...this.map.getContainer().querySelectorAll(".maplibregl-ctrl"), ...this.overlays]) {
@@ -386,11 +430,11 @@ export class ClimateMap {
     const camera = this.map.cameraForBounds([[west, Math.min(...lats)], [east, Math.max(...lats)]], { padding });
     if (!camera) return; // the padding leaves no room
     const oneWorld = Math.log2(this.map.getContainer().clientWidth / 512); // 512 px: the world's width at zoom 0
-    const zoom = Math.min(Math.max(camera.zoom, oneWorld, this.map.getMinZoom()), FIT_MAX_ZOOM);
+    const zoom = Math.min(Math.max(camera.zoom!, oneWorld, this.map.getMinZoom()), FIT_MAX_ZOOM);
     this.map.easeTo({ center: camera.center, zoom, duration: FIT_MS, essential: true });
   }
 
-  handleHover(e) {
+  handleHover(e: MapMouseEvent | null) {
     const feature = e && this.matchAt(e.point);
     const key = feature ? `${feature.properties.merged ? "c" : "p"}${feature.properties.rank}` : null;
     this.map.getCanvas().style.cursor = feature ? "pointer" : "crosshair";
@@ -404,10 +448,10 @@ export class ClimateMap {
   }
 
   /** A tooltip listing the matches merged into a pin. */
-  showTip(feature) {
-    const ranks = feature.properties.ranks.split(",").filter(Boolean).map(Number).sort((a, b) => a - b);
+  showTip(feature: MapGeoJSONFeature) {
+    const ranks = (feature.properties.ranks as string).split(",").filter(Boolean).map(Number).sort((a, b) => a - b);
     this.tip
-      .setLngLat(feature.geometry.coordinates)
+      .setLngLat((feature.geometry as GeoJSON.Point).coordinates as [number, number])
       .setHTML(ranks.map((r) => `#${r}`).join(", "))
       .addTo(this.map);
   }
@@ -421,13 +465,13 @@ export class ClimateMap {
  * The basemap's settlement symbols, drawn on demand (it has no sprite): "atlas-dot", a city's ink
  * dot, and "atlas-capital", a capital's ringed dot. Both are edged in paper to stand off the heatmap.
  */
-function addAtlasIcon(map, id) {
-  const r = { "atlas-dot": 3.5, "atlas-capital": 5 }[id]; // outer radius, CSS px
+function addAtlasIcon(map: Map, id: string) {
+  const r = ({ "atlas-dot": 3.5, "atlas-capital": 5 } as Record<string, number | undefined>)[id]; // outer radius, CSS px
   if (!r || map.hasImage(id)) return;
   const ratio = 2;
-  const ctx = Object.assign(document.createElement("canvas"), { width: 2 * r * ratio, height: 2 * r * ratio }).getContext("2d");
+  const ctx = Object.assign(document.createElement("canvas"), { width: 2 * r * ratio, height: 2 * r * ratio }).getContext("2d")!;
   ctx.scale(ratio, ratio);
-  const disc = (radius, color) => {
+  const disc = (radius: number, color: string) => {
     ctx.beginPath();
     ctx.arc(r, r, radius, 0, 2 * Math.PI);
     ctx.fillStyle = color;
@@ -443,12 +487,12 @@ function addAtlasIcon(map, id) {
 }
 
 /** Render the heatmap legend from /heatmap/legend stops into `el`; the caller shows it once there is a heatmap. */
-export function renderLegend(el, stops, excluded) {
+export function renderLegend(el: HTMLElement, stops: LegendStop[], excluded: Legend["excluded"]) {
   stops = [...stops].sort((a, b) => b.top_pct - a.top_pct); // 5% (faint) -> 0.01% (strong)
-  const rgba = (c) => `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${c.length < 4 ? 1 : c[3] > 1 ? (c[3] / 255).toFixed(3) : c[3]})`;
+  const rgba = (c: number[]) => `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${c.length < 4 ? 1 : c[3] > 1 ? (c[3] / 255).toFixed(3) : c[3]})`;
   // Colors interpolate in log(top_pct), so place the stops on a log scale.
-  const lo = Math.log(stops[0].top_pct), hi = Math.log(stops.at(-1).top_pct);
-  const pos = (i) => (100 * (lo - Math.log(stops[i].top_pct))) / (lo - hi);
+  const lo = Math.log(stops[0].top_pct), hi = Math.log(stops.at(-1)!.top_pct);
+  const pos = (i: number) => (100 * (lo - Math.log(stops[i].top_pct))) / (lo - hi);
   const gradient = stops.map((s, i) => `${rgba(s.rgba)} ${pos(i)}%`).join(", ");
   // A short title: the exclusion radius has its own line.
   el.innerHTML = `

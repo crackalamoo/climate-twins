@@ -31,11 +31,16 @@ unzip -o data/naturalearth/admin1.zip -d data/naturalearth/
 # 3. Build the index (~30 s, ~3.4 GB peak RAM) -> data/processed/ (~1.8 GB)
 uv run climate-twins-build
 
-# 4. Serve the UI and API on 0.0.0.0:8000 (~0.7 GB live, ~0.9 GB peak during a search)
+# 4. Bundle the UI (TypeScript in web/) into climate_twins/static/; `pnpm dev` rebuilds on change
+pnpm install
+pnpm build
+
+# 5. Serve the UI and API on 0.0.0.0:8000 (~0.7 GB live, ~0.9 GB peak during a search)
 uv run climate-twins-serve
 ```
 
-Tests: `uv run pytest -q` (synthetic data; doesn't need the real index).
+Tests: `uv run pytest -q` (synthetic data; doesn't need the real index). Type-check the UI:
+`pnpm check`.
 
 ## API
 

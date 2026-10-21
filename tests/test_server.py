@@ -120,7 +120,7 @@ def test_tile_out_of_range_is_400(client: TestClient):
     assert r.status_code == 400
 
 
-@pytest.mark.parametrize("path", ["/", "/app.js"])
+@pytest.mark.parametrize("path", ["/", "/style.css"])
 def test_static_files_revalidate(client: TestClient, path: str):
     r = client.get(path)
     assert r.status_code == 200
