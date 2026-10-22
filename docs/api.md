@@ -80,6 +80,19 @@ only roughly the top 5% visible; similar land within `exclude_km` is grey. Colou
 
 Alpha is 0–255. Colours interpolate in log(`top_pct`); rarer than the last stop takes its colour.
 
+## `GET /?lat&lon&exclude&suppress&align`
+
+The web UI. Its `<head>` (title, description, Open Graph tags) describes the query in the URL, in
+the UI's parameters, for link previews; without a usable query on land, the site (`page.py`).
+`og:image` is the same URL's `/preview.png`.
+
+## `GET /preview.png?lat&lon&exclude&suppress&align`
+
+The page's link-preview card, read from the same parameters the same way: a 1200×630 PNG of the
+query's heatmap on an Equal Earth world map, its star and top 5 matches, under the place as the
+panel names it; without a usable query on land, the site's card (`preview.py`).
+`Cache-Control: public, max-age=86400`.
+
 ## `GET /health`
 
 Status, index size and build info, `places` (0 without place names), cache sizes, load time.

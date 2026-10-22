@@ -82,6 +82,35 @@ _EMPTY_RGBA = colorize(np.full((TILE_SIZE, TILE_SIZE), 100.0))
 EMPTY_PNG = encode_png(_EMPTY_RGBA)
 
 
+def shade(
+    index: ClimateIndex,
+    q: Query,
+    d2: np.ndarray,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    exclude_km: float = 0.0,
+    center: tuple[float, float] | None = None,
+) -> np.ndarray | None:
+    """RGBA of the heatmap for one query at points (lat, lon) of land at squared climate distance d2
+    from it (NaN: not land), or None if nothing is colored.
+
+    Percentiles are relative to land at least exclude_km from the query; colored land
+    within exclude_km of `center` (default: the query cell) is grey.
+    """
+    land = ~np.isnan(d2)
+    top = np.full(d2.shape, 100.0)
+    top[land] = q.top_pct(d2[land], exclude_km)
+    if not (top <= LEGEND_STOPS[0][0]).any():
+        return None
+    rgba = colorize(top)
+    if exclude_km > 0:
+        clat, clon = center if center is not None else (index.lat_of(q.qi), index.lon_of(q.qi))
+        inside = land & (great_circle_km(clat, clon, lat, lon) < exclude_km)
+        rgba[inside, :3] = EXCLUDED_RGB
+        rgba[inside, 3] = np.rint(rgba[inside, 3] * EXCLUDED_ALPHA_SCALE).astype(np.uint8)
+    return rgba
+
+
 def render_tile(
     index: ClimateIndex,
     q: Query,
@@ -91,25 +120,14 @@ def render_tile(
     exclude_km: float = 0.0,
     center: tuple[float, float] | None = None,
 ) -> bytes:
-    """PNG of the heatmap for one query: each pixel takes the land cell under its centre.
-
-    Percentiles are relative to land at least exclude_km from the query; colored land
-    within exclude_km of `center` (default: the query cell) is drawn grey.
-    """
+    """PNG of the heatmap (shade) for one query: each pixel takes the land cell under its centre."""
     check_tile(z, x, y)
     lat, lon = pixel_centers(z, x, y)
     pos = index.positions_at(lat[:, None], lon[None, :])
     land = pos >= 0
     if not land.any():
         return EMPTY_PNG
-    top = np.full(pos.shape, 100.0)
-    top[land] = q.top_pct(index.d2_at(q, pos[land]), exclude_km)  # only this tile's cells
-    if not (top <= LEGEND_STOPS[0][0]).any():
-        return EMPTY_PNG
-    rgba = colorize(top)
-    if exclude_km > 0:
-        clat, clon = center if center is not None else (index.lat_of(q.qi), index.lon_of(q.qi))
-        inside = land & (great_circle_km(clat, clon, lat[:, None], lon[None, :]) < exclude_km)
-        rgba[inside, :3] = EXCLUDED_RGB
-        rgba[inside, 3] = np.rint(rgba[inside, 3] * EXCLUDED_ALPHA_SCALE).astype(np.uint8)
-    return encode_png(rgba)
+    d2 = np.full(pos.shape, np.nan, dtype=np.float32)
+    d2[land] = index.d2_at(q, pos[land])  # only this tile's cells
+    rgba = shade(index, q, d2, lat[:, None], lon[None, :], exclude_km, center)
+    return EMPTY_PNG if rgba is None else encode_png(rgba)

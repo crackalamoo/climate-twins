@@ -8,6 +8,8 @@
 # variable fonts, then subsets each into the latin and latin-ext woff2 files style.css's @font-face
 # rules name (same unicode ranges). Every OpenType feature is kept: prebuilt subsets (fontsource's)
 # drop onum, the old-style figures the panel sets text in.
+# The static Regular itself, whole, goes to climate_twins/fonts/ for the link-preview card
+# (preview.py), out of the site's static files.
 # Needs curl and uv; everything else goes in the scratch dir (default: a temp dir).
 set -euo pipefail
 
@@ -32,4 +34,6 @@ for face in 400-normal 700-normal 400-italic; do
       --layout-features='*' --flavor=woff2 --output-file="$out/libre-caslon-text-$subset-$face.woff2"
   done
 done
+
+cp "$work/ttf/400-normal.ttf" "$out/../../fonts/libre-caslon-text-regular.ttf"
 echo "Fonts written to $out"

@@ -113,6 +113,13 @@ function queryName(place: Place | null) {
   return place?.tier === "exact" || place?.tier === "near" ? place.name : null;
 }
 
+/** The tab title, as the server's page.py first sets it: "Portland's climate twins" in or near a
+ * city, else the place's first line. */
+function tabTitle(place: Place | null, cell: Cell) {
+  const name = queryName(place);
+  return `${name ? `${possessive(name)} climate twins` : placeLines(place, cell)[0]} · Climate Twins`;
+}
+
 /**
  * How a match compares with well-known cities near the query (the server's `ruler_comparison`, a
  * city in the response's `ruler`), as {text, title}: "Closer to Portland's climate than Seattle
@@ -254,6 +261,7 @@ function render(data: SimilarResponse) {
     <div class="stats">${statsHtml(q.summary)}</div>
     <h3 class="twins">Its climate twins</h3>`;
   ui.querySummary.hidden = false;
+  document.title = tabTitle(q.place, q.cell);
 
   ui.results.innerHTML = "";
   if (!data.matches.length) {

@@ -1,5 +1,6 @@
 import io
 from collections.abc import Iterator
+from html import unescape
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +14,7 @@ from climate_twins.features import VARIANCE_TARGET
 from climate_twins.index import MONTHLY_VARS
 from climate_twins.places import Places
 import climate_twins.server as server
+from climate_twins import page
 from climate_twins.geo import great_circle_km
 from climate_twins.server import app
 
@@ -88,6 +90,62 @@ def test_places_search(client: TestClient):
     (p,) = client.get("/places/search", params={"q": "Portland, OR, USA"}).json()
     assert p["label"] == "Portland, Oregon, United States"
     assert client.get("/places/search", params={"q": p["label"]}).json() == [p]
+
+
+def head(html: str) -> tuple[str, str]:
+    title = html.split("<title>")[1].split("</title>")[0]
+    return title, html.split('<meta name="description" content="')[1].split('"')[0]
+
+
+def test_page_describes_the_query_in_its_url(client: TestClient):
+    params = {"lat": NC_QUERY[0], "lon": NC_QUERY[1], "exclude": 1000, "suppress": "x"}
+    place = client.get("/climate", params={"lat": NC_QUERY[0], "lon": NC_QUERY[1]}).json()["place"]
+    title, description = head(client.get("/", params=params).text)
+    assert title == f"{page.short_headline(place)} · Climate Twins"
+    assert description.startswith("The places on Earth whose climate is most like ")
+
+
+@pytest.mark.parametrize("params", [{}, {"lat": "x", "lon": "y"}, {"lat": 0, "lon": -30}, {"lat": 95, "lon": 0}])
+def test_page_without_a_query_on_land_describes_the_site(client: TestClient, params: dict):
+    assert head(client.get("/", params=params).text) == ("Climate Twins", page.SITE_DESCRIPTION)
+
+
+def test_page_names_places_like_the_ui():
+    city = {"tier": "exact", "name": "Brussels", "country": "Belgium", "label": "Brussels, Belgium", "in_area": None}
+    offset = {"tier": "offset", "name": "Cairns", "km": 1234.4, "direction": "NW", "label": "1234 km NW of Cairns, Queensland, Australia",
+              "area": {"admin1": "Queensland", "country": "Australia"}}
+    region = {"tier": "region", "name": "Iran", "label": "in Iran", "area": {"admin1": None, "country": "Iran"}}
+    assert [page.short_headline(p) for p in (city, offset, region)] == ["Brussels' climate twins", "1,234 km NW of Cairns", "Iran"]
+    assert [page.headline(p) for p in (city, offset, region)] == [
+        "Brussels' climate twins", "Climate twins of a spot 1,234 km NW of Cairns", "Climate twins of a spot in Iran"]
+    assert [page.card_lines(p) for p in (city, {**city, "in_area": "Flanders, Belgium"}, offset, region)] == [
+        ("Climate twins of", "Brussels"), ("Climate twins of a spot", "near Brussels"),
+        ("Climate twins of a spot", "1,234 km NW of Cairns"), ("Climate twins of a spot", "in Iran")]
+    assert page.description(offset, [city, region, None, None]) == (
+        "The places on Earth whose climate is most like the spot 1234 km NW of Cairns, Queensland, Australia: "
+        "Brussels, Belgium; Iran, and 2 more."
+    )
+
+
+def card(r) -> bytes:
+    assert r.status_code == 200 and r.headers["cache-control"] == server.TILE_CACHE_CONTROL
+    assert Image.open(io.BytesIO(r.content)).size == (1200, 630)
+    return r.content
+
+
+def test_preview_card(client: TestClient):
+    site = card(client.get("/preview.png"))
+    for params in ({"lat": "x", "lon": "y"}, {"lat": 0, "lon": -30}, {"lat": 95, "lon": 0}):
+        assert card(client.get("/preview.png", params=params)) == site
+    assert card(client.get("/preview.png", params={"lat": NC_QUERY[0], "lon": NC_QUERY[1], "exclude": "x"})) != site
+
+
+def test_page_previews_with_its_card(client: TestClient):
+    query = f"lat={NC_QUERY[0]}&lon={NC_QUERY[1]}&align=calendar"
+    html = client.get(f"/?{query}").text
+    image = unescape(html.split('<meta property="og:image" content="')[1].split('"')[0])
+    assert image == f"http://testserver/preview.png?{query}"
+    assert '<meta name="twitter:card" content="summary_large_image">' in html
 
 
 def test_health_counts_boundaries(client: TestClient, built: tuple[Path, dict], geonames_dir: Path):
@@ -221,3 +279,4 @@ def test_ruler_comparisons(ruler_request: SimpleNamespace):
 def test_ruler_without_places(client_without_places: TestClient):
     body = client_without_places.get("/similar", params={"lat": NC_QUERY[0], "lon": NC_QUERY[1], "n": 1}).json()
     assert body["ruler"]["cities"] == []
+

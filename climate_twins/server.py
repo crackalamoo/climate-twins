@@ -8,24 +8,31 @@
     GET /places/search?q=..[&limit=8]
     GET /tiles/{z}/{x}/{y}.png?lat=..&lon=..[&align=auto&exclude_km=1500]
     GET /heatmap/legend
+    GET /?lat=..&lon=..   the web UI, its <head> describing the query
+    GET /preview.png?lat=..&lon=..   its link-preview card
 
 See docs/api.md.
 """
 
 import argparse
+import functools
+import hashlib
 import logging
+import math
 import os
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, Path as PathParam, Query, Request, Response
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import tiles
+from . import page, preview, tiles
 from .index import DEFAULT_EXCLUDE_KM, MAX_SNAP_KM, Align, ClimateIndex, NoLandError
 from .boundaries import Boundaries
 from .places import CITY_KM, Places
@@ -41,6 +48,8 @@ TILE_CACHE_CONTROL = "public, max-age=86400"
 STATIC_CACHE_CONTROL = "no-cache"
 DEFAULT_PORT = 8000
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+# The page's description counts matches as the UI lists them (N_RESULTS in web/app.ts).
+PAGE_MATCHES = 20
 # The ruler: well-known cities near the query, scored like matches, so the UI can say a match is
 # "closer to Portland's climate than Seattle is". Cities are label-eligible ones of
 # RULER_MIN_POPULATION+, out to the labels' CITY_KM. Nearer than RULER_MIN_KM is the query's own metro
@@ -237,6 +246,108 @@ def tile(
 @app.get("/heatmap/legend")
 def heatmap_legend() -> dict:
     return tiles.legend()
+
+
+@dataclass(frozen=True)
+class PageQuery:
+    """The query in a page's URL, rounded and clamped; None where /similar's default applies."""
+
+    lat: float
+    lon: float
+    align: Align
+    exclude_km: float | None
+    suppress_km: float | None
+
+
+def page_query(request: Request) -> PageQuery | None:
+    """The query in the page's URL, read the way the UI reads it (unusable values fall back to
+    defaults), or None without a usable point."""
+    q = request.query_params
+
+    def num(key: str) -> float | None:
+        try:
+            v = float(q[key])
+        except (KeyError, ValueError):
+            return None
+        return v if math.isfinite(v) else None
+
+    lat, lon = num("lat"), num("lon")
+    if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+    exclude, suppress = num("exclude"), num("suppress")
+    return PageQuery(
+        round(lat, 4), round(lon, 4), "calendar" if q.get("align") == "calendar" else "auto",
+        None if exclude is None else min(max(exclude, 0.0), 20000.0),
+        None if suppress is None else min(max(suppress, 0.0), 20000.0),
+    )
+
+
+# Each view of a shared link asks for the same page and card, so their matches are kept (a few
+# hundred bytes each).
+@functools.lru_cache(maxsize=1024)
+def cached_page_matches(index: ClimateIndex, q: PageQuery) -> tuple[tuple[float, float, float], ...] | None:
+    """The query's matches as (lat, lon, top % of land), best first, or None off land."""
+    options = {k: v for k, v in (("exclude_km", q.exclude_km), ("suppress_km", q.suppress_km)) if v is not None}
+    try:
+        result = index.similar(q.lat, q.lon, PAGE_MATCHES, align=q.align, **options)
+    except NoLandError:
+        return None
+    return tuple((m["cell"]["lat"], m["cell"]["lon"], 100 - m["more_similar_than_pct_of_land"]) for m in result["matches"])
+
+
+# Their labels too (a few KB each).
+@functools.lru_cache(maxsize=1024)
+def cached_page_labels(index: ClimateIndex, places: Places, q: PageQuery) -> tuple[dict, list] | None:
+    """The Place labels of the query and its matches (those the description names; None for the
+    rest), or None off land or where nothing is near enough to name."""
+    matches = cached_page_matches(index, q)
+    if matches is None or (place := places.label_for(q.lat, q.lon)) is None:
+        return None
+    named = [places.label_for(lat, lon) for lat, lon, _ in matches[: page.NAMED_MATCHES]]
+    return place, named + [None] * (len(matches) - len(named))
+
+
+def page_labels(request: Request, q: PageQuery | None) -> tuple[dict, list] | None:
+    places: Places | None = request.app.state.places
+    return cached_page_labels(request.app.state.index, places, q) if q and places else None
+
+
+@app.get("/", response_class=HTMLResponse)
+def index_page(request: Request) -> Response:
+    """The web UI, its <head> describing the query in the URL (page.py). Revalidated like the
+    static files."""
+    place, matches = page_labels(request, page_query(request)) or (None, None)
+    image = request.url_for("preview_image").replace(query=request.url.query)
+    body = page.render((STATIC_DIR / "index.html").read_text(), str(request.url), str(image), place, matches)
+    etag = f'"{hashlib.sha256(body.encode()).hexdigest()[:32]}"'
+    headers = {"Cache-Control": STATIC_CACHE_CONTROL, "ETag": etag}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return HTMLResponse(body, headers=headers)
+
+
+# Cards are ~100-150 KB: this keeps at most ~20 MB of them.
+@functools.lru_cache(maxsize=128)
+def cached_preview(index: ClimateIndex, places: Places | None, q: PageQuery | None) -> bytes:
+    """The card for q, which has labels (page_labels), or with None the site's."""
+    boundaries = places.boundaries if places else None
+    if q is None:
+        return preview.render(index, boundaries, page.SITE_DESCRIPTION.rstrip("."), page.SITE_NAME)
+    center = (q.lat, q.lon)
+    return preview.render(
+        index, boundaries, *page.card_lines(cached_page_labels(index, places, q)[0]),
+        index.query(index.locate(*center)[0], q.align), DEFAULT_EXCLUDE_KM if q.exclude_km is None else q.exclude_km,
+        center, cached_page_matches(index, q),
+    )
+
+
+@app.get("/preview.png", response_class=Response)
+def preview_image(request: Request) -> Response:
+    """The page's link-preview card (preview.py) for the query in the URL, read as the page reads it:
+    the site's where the page describes the site."""
+    q = page_query(request)
+    png = cached_preview(request.app.state.index, request.app.state.places, q if page_labels(request, q) else None)
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": TILE_CACHE_CONTROL})
 
 
 class RevalidatedStaticFiles(StaticFiles):
