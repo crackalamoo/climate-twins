@@ -3,13 +3,13 @@
   "type": "module",
   "packageManager": "pnpm@12.14.0",
   "scripts": {
-    "build": "esbuild app=web/app.ts maplibre-gl-worker=maplibre-gl/dist/maplibre-gl-worker.mjs --bundle --splitting --chunk-names=maplibre-gl-shared --format=esm --target=es2022 --minify --sourcemap --outdir=climate_twins/static",
+    "build": "esbuild app=web/app.ts maplibre-gl-worker=maplibre-gl/dist/maplibre-gl-worker.mjs --bundle --format=esm --target=es2022 --minify --sourcemap --outdir=climate_twins/static",
     "dev": "pnpm build --watch",
     "check": "tsc"
   },
   "dependencies": {
     "@observablehq/plot": "0.6.17",
-    "maplibre-gl": "6.12.0"
+    "maplibre-gl": "6.15.0"
   },
   "devDependencies": {
     "@maplibre/maplibre-gl-style-spec": "26.4.4",

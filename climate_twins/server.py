@@ -42,9 +42,9 @@ DEFAULT_DATA = ROOT / "data" / "processed"
 DEFAULT_GEONAMES = ROOT / "data" / "geonames"
 DEFAULT_BOUNDARIES = ROOT / "data" / "naturalearth"
 TILE_CACHE_CONTROL = "public, max-age=86400"
-# The UI's bundle files have fixed names and import each other, so a browser mixing a fresh app.js
-# with a stale cached maplibre-gl-shared.js fails to start. Revalidate every load; ETags keep
-# unchanged files a cheap 304.
+# The UI's bundle files have fixed names and work together, so a browser mixing a fresh app.js with
+# a stale cached maplibre-gl-worker.js (another MapLibre version) breaks. Revalidate every load;
+# ETags keep unchanged files a cheap 304.
 STATIC_CACHE_CONTROL = "no-cache"
 DEFAULT_PORT = 8000
 STATIC_DIR = Path(__file__).resolve().parent / "static"
