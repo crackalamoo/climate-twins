@@ -5,7 +5,7 @@
 from html import escape
 
 SITE_NAME = "Climate Twins"
-SITE_DESCRIPTION = "Pick any place and find where else on Earth has the same climate."
+SITE_DESCRIPTION = "Find places around the world whose climate is most like yours."  # index.html's intro
 # How many matches the description names; it counts the rest.
 NAMED_MATCHES = 3
 IMAGE_SIZE = (1200, 630)  # the card's: Open Graph's recommended size, also X's large-image card
