@@ -11,7 +11,6 @@ import functools
 import io
 import logging
 import math
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -118,25 +117,6 @@ def font_features() -> dict:
 @functools.cache
 def face(px: float) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(str(CARD_FONT), px, layout_engine=layout_engine())
-
-
-def _drawn(ch: str) -> bytes:
-    image = Image.new("L", (48, 48))
-    ImageDraw.Draw(image).text((8, 36), ch, font=face(24), fill=255, anchor="ls")
-    return image.tobytes()
-
-
-@functools.cache
-def has_glyph(ch: str) -> bool:
-    """Whether the card's face has `ch`. Pillow can't ask FreeType's cmap, so: whether it draws ch
-    other than as .notdef (as it draws a private-use character, which the face has none of)."""
-    return ch.isspace() or _drawn(ch) != _drawn("\ue000")
-
-
-def coverable(text: str) -> str:
-    """`text` with each character the face lacks decomposed into those it has, which HarfBuzz
-    positions ("Ḩalwān": "Halwān", the cedilla being one it lacks), else dropped: not .notdef boxes."""
-    return "".join(c if has_glyph(c) else "".join(filter(has_glyph, unicodedata.normalize("NFD", c))) for c in text)
 
 
 def tracked(draw: ImageDraw.ImageDraw, x: float, baseline: float, text: str, font: ImageFont.FreeTypeFont, tracking: float, fill) -> None:
@@ -356,7 +336,7 @@ def render(
     """The card as PNG: `headline` under `kicker`, over the map with the heatmap of q (as tiles.shade
     colours it) centred on `center` (its star), and its best matches as (lat, lon, top %) pins, best
     first. `boundaries`: for country borders."""
-    font, lines = set_headline(coverable(headline.replace("'", "’")))  # typeset apostrophes
+    font, lines = set_headline(headline.replace("'", "’"))  # typeset apostrophes
     plate_ = plate(index, boundaries, len(lines))
     card = plate_.base.copy()
     rgba = None
@@ -378,7 +358,7 @@ def render(
 
     draw = ImageDraw.Draw(image)
     small, tracking = face(KICKER_PX), KICKER_TRACKING * KICKER_PX
-    tracked(draw, TEXT_LEFT, KICKER_BASELINE, coverable(kicker.upper()), small, tracking, MUTED)
+    tracked(draw, TEXT_LEFT, KICKER_BASELINE, kicker.upper(), small, tracking, MUTED)
     for i, line in enumerate(lines):
         draw.text((TEXT_LEFT, HEADLINE_BASELINE + i * HEADLINE_LEADING), line, font=font, fill=INK, anchor="ls", **font_features())
     buf = io.BytesIO()

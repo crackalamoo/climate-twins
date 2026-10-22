@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial import cKDTree
 
+from . import glyphs
 from .boundaries import Boundaries
 from .geo import EARTH_RADIUS_KM, great_circle_km, unit_vectors
 
@@ -31,7 +32,7 @@ CITIES_FILE = "cities500.txt"
 ADMIN1_FILE = "admin1CodesASCII.txt"
 COUNTRY_FILE = "countryInfo.txt"
 CACHE_FILE = "places.npz"
-CACHE_VERSION = 7
+CACHE_VERSION = 8
 
 # Labels only name places people have heard of, and population is the best fame signal
 # in GeoNames: a city of CITY_MIN_POPULATION+ within CITY_KM, trading size against
@@ -108,7 +109,7 @@ SKIP_FEATURE_CODES = {"PPLH", "PPLQ", "PPLW", "PPLCH"}
 # Sections of a populated place (suburbs, localities): searchable, but labels name a town.
 NOT_LABEL_FEATURE_CODES = {"PPLX"}
 COMPASS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
-_STR_FIELDS = ("name", "asciiname", "admin1", "country")
+_STR_FIELDS = ("name", "asciiname", "country")
 
 
 # Letters NFKD doesn't decompose into a base letter and a mark ("Bakı", "Łódź").
@@ -263,10 +264,12 @@ def _chord(km: float) -> float:
 def _parse(directory: Path) -> dict[str, np.ndarray]:
     """Parse the GeoNames text files (data only) into column arrays."""
     admin1: dict[str, str] = {}
+    admin1_ascii: list[str] = []
     for line in (directory / ADMIN1_FILE).read_text(encoding="utf-8").split("\n"):
         f = line.split("\t")
         if len(f) >= 2 and f[0]:
             admin1[f[0]] = f[1]
+            admin1_ascii.append(f[2] if len(f) > 2 and f[2] else f[1])
     admin1_index = {code: j for j, code in enumerate(admin1)}
     countries: dict[str, str] = {}
     iso3: list[str] = []
@@ -296,7 +299,6 @@ def _parse(directory: Path) -> dict[str, np.ndarray]:
             cc = f[8]
             cols["name"].append(f[1])
             cols["asciiname"].append(f[2] or f[1])
-            cols["admin1"].append(admin1.get(f"{cc}.{f[10]}", ""))
             cols["admin1_index"].append(admin1_index.get(f"{cc}.{f[10]}", -1))
             big = pop >= CITY_MIN_POPULATION
             cols["alt_names"].append("|".join(_spellings(f[1], f[3])) if big else "")
@@ -310,6 +312,7 @@ def _parse(directory: Path) -> dict[str, np.ndarray]:
     out = {k: _pack(cols[k]) for k in (*_STR_FIELDS, "alt_names", "aliases")}
     # Name tables by code, for the codes boundary polygons give ("US.CA" -> "California", "US").
     out["admin1_codes"], out["admin1_names"] = _pack(list(admin1)), _pack(list(admin1.values()))
+    out["admin1_ascii_names"] = _pack(admin1_ascii)
     out["country_codes"], out["country_names"] = _pack(list(countries)), _pack(list(countries.values()))
     out["country_iso3"], out["country_tlds"] = _pack(iso3), _pack(tlds)  # "USA", "us"; for search
     out["admin1_index"] = np.array(cols["admin1_index"], dtype=np.int32)  # into admin1_codes, -1 if none
@@ -376,8 +379,15 @@ class Places:
     """GeoNames populated places with a spatial index and a name-prefix index."""
 
     def __init__(self, cols: dict[str, np.ndarray], boundaries: Boundaries | None = None):
-        self.name, self.asciiname, self.admin1, self.country = (_unpack(cols[k]) for k in _STR_FIELDS)
-        self.admin1_by_code = dict(zip(_unpack(cols["admin1_codes"]), _unpack(cols["admin1_names"])))
+        self.name, self.asciiname, self.country = (_unpack(cols[k]) for k in _STR_FIELDS)
+        self.admin1_index = cols["admin1_index"]  # into admin1_codes, -1 if none
+        # A name with a letter the site's type lacks is shown by its ASCII name (glyphs.py): search
+        # still finds it by either, as both normalize alike.
+        self.name = [n if glyphs.covers(n) else a for n, a in zip(self.name, self.asciiname)]
+        admin1_names = [n if glyphs.covers(n) else a
+                        for n, a in zip(_unpack(cols["admin1_names"]), _unpack(cols["admin1_ascii_names"]))]
+        self.admin1 = [admin1_names[j] if j >= 0 else "" for j in self.admin1_index]
+        self.admin1_by_code = dict(zip(_unpack(cols["admin1_codes"]), admin1_names))
         self.boundaries = boundaries
         self.country_by_code = dict(zip(_unpack(cols["country_codes"]), _unpack(cols["country_names"])))
         self.country_code = cols["country_code"].tolist()
@@ -385,7 +395,6 @@ class Places:
         self.population = cols["population"]
         self.labels = cols["labels"]  # usable as a label (not a section of another place)
         self.alt_names = _unpack(cols["alt_names"])  # "|"-separated; only for cities that can label
-        self.admin1_index = cols["admin1_index"]  # into admin1_codes, -1 if none
         country_codes = _unpack(cols["country_codes"])
         country_index = {cc: j for j, cc in enumerate(country_codes)}
         self.country_index = np.array([country_index.get(cc, -1) for cc in self.country_code], dtype=np.int16)

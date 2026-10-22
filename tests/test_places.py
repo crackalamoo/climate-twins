@@ -451,3 +451,11 @@ def test_region_is_generic(region, generic):
 def test_spellings_keep_variants_not_other_names():
     assert _spellings("Cusco", "Cuzco,Qosqo,Cuzco,Cusco City") == ["Cuzco"]
     assert _spellings("Recife", "Pernambuco,Recife,Ресифи") == ["Recife"]
+
+
+def test_names_with_letters_the_type_lacks_show_their_ascii_names(tmp_path: Path):
+    rows = [("Ḩalwān", "Halwan", 29.84, 31.33, "EG", "", 230_000, "PPLA2"),
+            ("Kraków", "Krakow", 50.06, 19.94, "PL", "", 770_000, "PPLA")]
+    places = Places.load(write_geonames(tmp_path, rows))
+    assert [p["name"] for q in ("halwan", "Ḩalwān") for p in places.search(q)] == ["Halwan", "Halwan"]
+    assert places.search("krakow")[0]["name"] == "Kraków"
