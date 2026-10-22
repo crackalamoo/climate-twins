@@ -375,8 +375,8 @@ table.summary thead th { font-weight: 400; font-style: italic; border-bottom-col
 /* tooltips stay in the sans: Plot spaces their lines for it, and the serif's taller lines collide */
 #compare svg [aria-label="tip"] { font-family: var(--sans); }
 
-/* data credits, at the foot of the panel (pushed down when the panel is short) */
-.credits { margin-top: auto; padding-top: 12px; font-size: 11px; color: var(--muted); }
+/* data credits and byline, at the foot of the panel (pushed down when the panel is short) */
+.credits { margin-top: auto; padding-top: 12px; font-size: 11px; line-height: 1.6; color: var(--muted); }
 .credits a { color: inherit; text-decoration-color: var(--border); text-underline-offset: 2px; }
 
 /* ------------------------------------------------------------------------ the map's furniture
