@@ -34,7 +34,7 @@ const MIN_EXPLAINED = 0.35;
 // A seasonal or day/night phrase must explain this many times what the overall shift alone does, or
 // the plain "warmer" is said instead.
 const RICHER_GAIN = 1.25;
-// Seasons "arrive later" only when the peak shifts by at least this many months.
+// Summer or the rainy season "comes later" only when its peak shifts by at least this many months.
 const MIN_LAG_MONTHS = 0.5;
 // The query has a summer and winter when its warmest and coldest months differ by this much (°C,
 // daily mean); else its seasons, if any, are wet and dry.
@@ -46,7 +46,16 @@ const WET_DRY_RATIO = 2;
 // at least this fraction of the larger.
 const PART_FRACTION = 0.4;
 
-type Phrase = (size: string) => string;
+// What a factor's pattern says: a phrase, or how it differs by season, to merge with the other
+// factors' ("cooler, drier summers and milder, wetter winters").
+type Said = string | SeasonWord[];
+type Phrase = (size: string) => Said;
+
+interface SeasonWord {
+  season: 0 | 1; // the query's high season, or its low one
+  word: string;
+  size: string;
+}
 
 interface Seasons {
   cycle: number[];
@@ -61,7 +70,7 @@ interface Words {
   up: string;
   down: string;
   noun: string;
-  seasonal?: [string, string, string, string];
+  seasonal?: [string, string, string, string]; // up and down words in summer, then in winter
   summerOnly?: boolean;
 }
 
@@ -70,12 +79,21 @@ interface Part {
   up: string;
   down: string;
   when: string;
+  season?: 0 | 1;
+}
+
+// When in the year a factor's season comes (temperature's summer, rain's rainy season): the
+// direction of the query's annual cycle (a unit [a, b]) and how many months later the match's peaks.
+interface Timing {
+  cycle: number[];
+  lag: number;
+  season: string;
 }
 
 interface Factor {
   d2: number;
   series: number[][];
-  lag?: number;
+  timing?: Timing;
   words: Words;
   wind?: boolean;
 }
@@ -102,6 +120,21 @@ const harmonic = (v: number[]): [number, number] => [dot(v, COS) / 6, dot(v, SIN
 const peakMonth = ([a, b]: [number, number]) => (Math.atan2(b, a) * 6) / Math.PI;
 /** In season-aligned monthly diffs d, the mean over some months. */
 const over = (d: number[], months: number[]) => mean(months.map((i) => d[i]));
+const unit = (h: number[]) => h.map((x) => x / (Math.hypot(...h) || 1));
+/** How many months later (-6..6) a match's annual cycle peaks than the query's. */
+const lagMonths = (match: number[], query: number[]) => ((((peakMonth(harmonic(match)) - peakMonth(harmonic(query))) % 12) + 18) % 12) - 6;
+const logPpt = (mm: number) => Math.log(Math.max(mm, 0) + 15); // the feature's own log(mm + 15)
+
+/**
+ * The query's wet and dry seasons, when its wettest 3 months get WET_DRY_RATIO times its driest 3's
+ * rain: the direction of its rain's annual cycle (a unit [a, b]) and the seasons' months.
+ */
+function wetSeasons(q: Monthly): { cycle: number[]; hi: number[]; lo: number[] } | null {
+  const wet = monthsBy(q.ppt, true);
+  const dry = monthsBy(q.ppt, false);
+  if (mean(wet.map((i) => q.ppt[i])) + 15 < WET_DRY_RATIO * (mean(dry.map((i) => q.ppt[i])) + 15)) return null;
+  return { cycle: unit(harmonic(q.ppt.map(logPpt))), hi: wet, lo: dry };
+}
 
 /**
  * The query's seasons: the direction of its annual cycle (a unit [a, b]), its high and low seasons'
@@ -112,17 +145,11 @@ const over = (d: number[], months: number[]) => mean(months.map((i) => d[i]));
  */
 function seasons(q: Monthly): Seasons | null {
   const tmean = q.tmax.map((hi, i) => (hi + q.tmin[i]) / 2);
-  const unit = (h: number[]) => h.map((x) => x / (Math.hypot(...h) || 1));
   if (Math.max(...tmean) - Math.min(...tmean) >= SEASONAL_RANGE_C) {
     return { cycle: unit(harmonic(tmean)), hi: monthsBy(tmean, true), lo: monthsBy(tmean, false), names: ["summer", "winter"], temperate: true };
   }
-  const wet = monthsBy(q.ppt, true);
-  const dry = monthsBy(q.ppt, false);
-  if (mean(wet.map((i) => q.ppt[i])) + 15 >= WET_DRY_RATIO * (mean(dry.map((i) => q.ppt[i])) + 15)) {
-    const rain = q.ppt.map((mm) => Math.log(Math.max(mm, 0) + 15));
-    return { cycle: unit(harmonic(rain)), hi: wet, lo: dry, names: ["the wet season", "the dry season"], temperate: false };
-  }
-  return null;
+  const wet = wetSeasons(q);
+  return wet && { ...wet, names: ["the wet season", "the dry season"], temperate: false };
 }
 
 /**
@@ -131,28 +158,60 @@ function seasons(q: Monthly): Seasons | null {
  * much wetter winters"). The same way: the overall word, and which part most ("warmer, especially
  * at night"). parts: [{v, up, down, when}].
  */
-function twoParts(parts: Part[], words: Words, size: string) {
+function twoParts(parts: Part[], words: Words, size: string): Said {
   const larger = Math.abs(parts[1].v) > Math.abs(parts[0].v) ? 1 : 0;
   const [a, b] = [parts[larger], parts[1 - larger]];
   const word = (p: Part) => (p.v > 0 ? p.up : p.down);
-  if (Math.abs(b.v) < PART_FRACTION * Math.abs(a.v)) return sized(size, word(a));
+  const said = (named: Part[], sizeOf: (p: Part) => string): Said => {
+    if (a.season !== undefined) return named.map((p) => ({ season: p.season!, word: word(p), size: sizeOf(p) }));
+    const sizes = new Set(named.map(sizeOf));
+    return sizes.size === 1
+      ? sized(sizeOf(a), named.map(word).join(" and "))
+      : named.map((p) => sized(sizeOf(p), word(p))).join(" and ");
+  };
+  if (Math.abs(b.v) < PART_FRACTION * Math.abs(a.v)) return said([a], () => size);
   if (Math.sign(a.v) !== Math.sign(b.v)) {
     // "much" belongs to the larger part only; "slightly" covers both (a bare part would read larger).
-    if (size !== "much") return sized(size, parts.map(word).join(", "));
-    return parts.map((p, i) => (i === larger ? sized(size, word(p)) : word(p))).join(", ");
+    return said(parts, (p) => (size !== "much" || p === a ? size : ""));
   }
   return `${sized(size, a.v > 0 ? words.up : words.down)}, especially ${a.when}`;
+}
+
+/**
+ * The factors' seasonal words as one phrase, by season, in the factors' order: "cooler summers and
+ * milder winters", or with a semicolon when a season has more than one: "cooler, drier summers;
+ * milder, wetter winters". One size word for all of them leads the phrase ("slightly
+ * cooler summers and milder winters"); else each covers its own words, joined by "and", after the
+ * unsized ones: "drier, much cooler summers", "cooler, slightly drier and sunnier summers".
+ */
+function bySeason(words: SeasonWord[], s: Seasons): string {
+  const sizes = new Set(words.map((w) => w.size));
+  const shared = sizes.size === 1 ? words[0].size : null;
+  const counts = ([0, 1] as const).map((season) => words.filter((w) => w.season === season).length);
+  const phrase = ([0, 1] as const).flatMap((season) => {
+    const these = words.filter((w) => w.season === season);
+    if (!these.length) return [];
+    const groups = shared === null ? [...sizes].sort((x, y) => (x ? 1 : 0) - (y ? 1 : 0)) : [shared];
+    const adjectives = groups.flatMap((size) => {
+      const ws = these.filter((w) => w.size === size).map((w) => w.word);
+      if (!ws.length) return [];
+      return shared !== null || !size ? [ws.join(", ")] : [sized(size, ws.join(" and "))];
+    }).join(", ");
+    return [s.temperate ? `${adjectives} ${s.names[season]}s` : `${adjectives} in ${s.names[season]}`];
+  }).join(Math.max(...counts) > 1 ? "; " : " and ");
+  return sized(shared ?? "", phrase);
 }
 
 /**
  * How a factor's monthly diffs differ, as {explained, phrase, sized}: the pattern explaining most of
  * them; its share (0-1) of their sum of squares, which is its share of the factor's part of the
  * climate difference, as the patterns are orthogonal parts of the diffs; and whether the phrase takes
- * a size word. f.series is [d] or, for temperature, [dHighs, dLows]; f.lag is how many months later
+ * a size word. f.series is [d] or, for temperature, [dHighs, dLows]; f.timing is when its season
+ * comes, for temperature and rain.
  * the match's temperature peaks.
  */
 function pattern(f: Factor, s: Seasons | null): Pattern {
-  const { series, words, lag = 0 } = f;
+  const { series, words, timing } = f;
   const all = series.flat();
   const total = dot(all, all);
   if (!total) return { explained: 0 };
@@ -169,31 +228,30 @@ function pattern(f: Factor, s: Seasons | null): Pattern {
     const [ua, ub] = s.cycle;
     const swing = a * ua + b * ub; // a bigger (+) or smaller seasonal cycle
     const [hi, lo] = s.names;
-    const named = (word: string, season: string) => (s.temperate ? `${word} ${season}s` : `${word} in ${season}`);
-    const [hiUp, hiDown, loUp, loDown] = words.seasonal ?? [
-      named(words.up, hi), named(words.down, hi), named(words.up, lo), named(words.down, lo),
-    ];
-    const parts = [
-      { v: over(d, s.hi), up: hiUp, down: hiDown, when: `in ${hi}` },
-      { v: over(d, s.lo), up: loUp, down: loDown, when: `in ${lo}` },
+    const [hiUp, hiDown, loUp, loDown] = words.seasonal ?? [words.up, words.down, words.up, words.down];
+    const parts: Part[] = [
+      { v: over(d, s.hi), up: hiUp, down: hiDown, when: `in ${hi}`, season: 0 },
+      { v: over(d, s.lo), up: loUp, down: loDown, when: `in ${lo}`, season: 1 },
     ];
     // Winter humidity isn't felt: a humidity pattern that's mostly winter's says nothing worth saying.
     const summerOnly = words.summerOnly && s.temperate;
     if (!summerOnly || Math.abs(parts[0].v) >= PART_FRACTION * Math.abs(parts[1].v)) {
       candidates.push({
         ss: shift + k * 6 * swing * swing,
-        phrase: (size) => (summerOnly ? sized(size, parts[0].v > 0 ? hiUp : hiDown) : twoParts(parts, words, size)),
+        phrase: (size) => (summerOnly ? [{ season: 0, word: parts[0].v > 0 ? hiUp : hiDown, size }] : twoParts(parts, words, size)),
         richer: true,
       });
     }
-    if (isTemp && Math.abs(lag) >= MIN_LAG_MONTHS) {
-      const timing = b * ua - a * ub; // the same cycle, shifted later (+) or earlier
-      const n = Math.round(Math.abs(lag));
-      candidates.push({
-        ss: k * 6 * timing * timing,
-        phrase: () => `summer comes about ${n < 2 ? "a month" : `${n} months`} ${lag > 0 ? "later" : "earlier"}`,
-      });
-    }
+  }
+  if (timing && Math.abs(timing.lag) >= MIN_LAG_MONTHS) {
+    const [a, b] = harmonic(d);
+    const [ua, ub] = timing.cycle;
+    const shifted = b * ua - a * ub; // the same cycle, shifted later (+) or earlier
+    const n = Math.round(Math.abs(timing.lag));
+    candidates.push({
+      ss: k * 6 * shifted * shifted,
+      phrase: () => `${timing.season} comes about ${n < 2 ? "a month" : `${n} months`} ${timing.lag > 0 ? "later" : "earlier"}`,
+    });
   }
   if (k === 2) {
     const [highs, lows] = series.map(mean);
@@ -217,9 +275,10 @@ const sizeWord = (d2: number) => SIZE_WORDS.find(([min]) => d2 >= min)?.[1] ?? "
 /**
  * A terse verdict on how the match's climate differs from the query's, e.g. "Nearly identical
  * temperatures. Slightly sunnier." One sentence per factor with a clear pattern, the largest first,
- * sized on the search's own scale; a near-twin is "Very similar." and its largest difference. Null
- * without `monthly` on both and the match's `difference_d2`, or when the differences have no simple
- * pattern (the charts show them).
+ * sized on the search's own scale, but the factors that differ by season share one ("Cooler, drier
+ * summers; milder, wetter winters."); a near-twin is "Very similar." and its largest difference.
+ * When nothing else is said, a clear difference with no simple pattern is named: "Rainfall differs
+ * through the year." Null without `monthly` on both and the match's `difference_d2`.
  */
 export function verdict(query: QueryPoint, match: Match): string | null {
   const q = query.monthly;
@@ -229,23 +288,27 @@ export function verdict(query: QueryPoint, match: Match): string | null {
   const shift = match.seasons_shifted_6_months ? 6 : 0; // as the charts align them
   const aligned = (p: Monthly, v: keyof Monthly) => q[v].map((_, i) => p[v][p === m ? (i + shift) % 12 : i]);
   const diff = (v: keyof Monthly, f = (x: number) => x) => aligned(m, v).map((x, i) => f(x) - f(q[v][i]));
-  const logPpt = (mm: number) => Math.log(Math.max(mm, 0) + 15); // the feature's own log(mm + 15)
   const tmean = (p: Monthly) => aligned(p, "tmax").map((hi, i) => (hi + aligned(p, "tmin")[i]) / 2);
-  const lag = ((((peakMonth(harmonic(tmean(m))) - peakMonth(harmonic(tmean(q)))) % 12) + 18) % 12) - 6; // -6..6
   const s = seasons(q);
+  const wet = wetSeasons(q);
 
   const factors = [
     {
       d2: d2.tmax + d2.tmin,
       series: [diff("tmax"), diff("tmin")],
-      lag,
+      timing: s?.temperate ? { cycle: s.cycle, lag: lagMonths(tmean(m), tmean(q)), season: "summer" } : undefined,
       words: {
-        key: "temperature", up: "warmer", down: "cooler", noun: "temperatures",
-        seasonal: ["warmer summers", "cooler summers", "milder winters", "colder winters"],
+        key: "temperature", up: "warmer", down: "cooler", noun: "temperature",
+        seasonal: ["warmer", "cooler", "milder", "colder"],
       },
     },
+    {
+      d2: d2.ppt,
+      series: [diff("ppt", logPpt)],
+      timing: wet ? { cycle: wet.cycle, lag: lagMonths(aligned(m, "ppt").map(logPpt), q.ppt.map(logPpt)), season: "the rainy season" } : undefined,
+      words: { up: "wetter", down: "drier", noun: "rainfall" },
+    },
     { d2: d2.dewpoint, series: [diff("dewpoint")], words: { up: "more humid", down: "less humid", noun: "humidity", summerOnly: true } },
-    { d2: d2.ppt, series: [diff("ppt", logPpt)], words: { up: "wetter", down: "drier", noun: "rainfall" } },
     { d2: d2.clearness, series: [diff("clearness")], words: { up: "sunnier", down: "cloudier", noun: "sunshine" } },
     { d2: d2.ws, series: [diff("ws")], words: { up: "windier", down: "less windy", noun: "wind" }, wind: true },
   ] as ScoredFactor[];
@@ -260,15 +323,28 @@ export function verdict(query: QueryPoint, match: Match): string | null {
   // Wind rarely shapes how a climate feels: only a big difference, or the only one, is worth saying.
   shown = shown.filter((f) => !f.wind || f.clear >= MUCH_D2 || shown.length === 1);
   if (!shown.length) {
-    // Differences with no simple pattern are left to the charts; small ones mean the climates match.
-    const largest = Math.max(...factors.map((f) => f.d2));
-    if (largest < NEGLIGIBLE_D2) return "Nearly identical climates.";
-    return largest < CLEAR_D2 ? "Very similar climates." : null;
+    // Small differences mean the climates match; a clear one with no simple pattern is named, and
+    // the charts show it.
+    const largest = factors.reduce((a, b) => (b.d2 > a.d2 ? b : a));
+    if (largest.d2 < NEGLIGIBLE_D2) return "Nearly identical climates.";
+    if (largest.d2 < CLEAR_D2) return "Very similar climates.";
+    return `${largest.words.noun[0].toUpperCase()}${largest.words.noun.slice(1)} differs through the year.`;
   }
-  const phrase = (f: ScoredFactor) => f.phrase!(sizeWord(f.clear));
   // A near-twin (every difference slight): say so, and give only its largest difference.
-  const sentences = shown.every((f) => f.clear < CLEAR_D2)
-    ? ["very similar", phrase(shown[0])]
-    : [...(temperature.d2 < NEGLIGIBLE_D2 ? ["nearly identical temperatures"] : []), ...shown.map(phrase)];
+  const near = shown.every((f) => f.clear < CLEAR_D2);
+  if (near) shown = shown.slice(0, 1);
+  const said = new Map(shown.map((f) => [f, f.phrase!(sizeWord(f.clear))]));
+  // The seasonal words, in the factors' order, said where the largest of them would be.
+  const seasonal = factors.flatMap((f) => { const x = said.get(f); return Array.isArray(x) ? x : []; });
+  const first = shown.find((f) => Array.isArray(said.get(f)));
+  const phrases = shown.flatMap((f) => {
+    const x = said.get(f)!;
+    if (!Array.isArray(x)) return [x];
+    return f === first ? [bySeason(seasonal, s!)] : [];
+  });
+  const sentences = [
+    ...(near ? ["very similar"] : temperature.d2 < NEGLIGIBLE_D2 ? ["nearly identical temperatures"] : []),
+    ...phrases,
+  ];
   return sentences.map((t) => `${t[0].toUpperCase()}${t.slice(1)}.`).join(" ");
 }
