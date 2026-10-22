@@ -1,6 +1,7 @@
 // Climate Twins UI: wires the search box, controls, map, results list and comparison panel.
-// Query state lives in the URL (?lat&lon&exclude&suppress&align); the display units (units.js)
-// live only in memory.
+// Query state lives in the URL (?lat&lon&exclude&suppress&align); an open comparison lives in its
+// history entry's state ({detail: rank}), so the browser's back returns to the list; the display
+// units (units.js) live only in memory.
 
 import "maplibre-gl/dist/maplibre-gl.css";
 import { ClimateMap, matchColors, renderLegend } from "./map.js";
@@ -24,16 +25,28 @@ const ui = {
   units: $("units"),
   message: $("message"),
   empty: $("empty"),
+  panel: $("panel"),
+  list: $("list"),
   querySummary: $("query-summary"),
   results: $("results"),
+  detail: $("detail"),
+  back: $("back"),
+  prev: $<HTMLButtonElement>("prev"),
+  next: $<HTMLButtonElement>("next"),
+  position: $("position"),
+  pagerPrev: $<HTMLButtonElement>("pager-prev"),
+  pagerNext: $<HTMLButtonElement>("pager-next"),
   compare: $("compare"),
   legend: $("legend"),
 };
 const resultRows = () => ui.results.children as HTMLCollectionOf<HTMLLIElement>;
+const resultRow = (rank: number | null) => [...resultRows()].find((li) => Number(li.dataset.rank) === rank);
 
 let current: SimilarResponse | null = null; // last successful /similar response
 let queryPoint: { lat: number; lon: number } | null = null; // {lat, lon} of the last requested query
+let shownSearch: string | null = null; // the URL's query string for `current`
 let selectedRank: number | null = null;
+let listScroll = 0; // the panel's scroll position in the list, restored on coming back to it
 let queryAbort: AbortController | null = null;
 
 const map = new ClimateMap("map", {
@@ -183,14 +196,16 @@ function updateUrl(lat: number, lon: number) {
     align: p.align,
   });
   history.replaceState(null, "", `?${qs}`);
+  shownSearch = location.search;
 }
 
 /**
  * Run a similarity query; only the latest request's response is rendered. Then the map shows the
  * star and all the matches (`fit`): "always" for a new place, "ifHidden" when a slider changes which
- * matches a place has (move only if one is out of view), "never" to leave the camera be.
+ * matches a place has (move only if one is out of view), "never" to leave the camera be. The panel
+ * returns to the list, or opens match `open` (a reload of a comparison).
  */
-async function runQuery(lat: number, lon: number, { fit = "always" } = {}) {
+async function runQuery(lat: number, lon: number, { fit = "always", open = null as number | null } = {}) {
   queryAbort?.abort();
   const abort = (queryAbort = new AbortController());
   const p = params();
@@ -240,6 +255,10 @@ async function runQuery(lat: number, lon: number, { fit = "always" } = {}) {
   queryPoint = { lat, lon };
   updateUrl(lat, lon);
   const pinned = render(data);
+  selectedRank = null;
+  setView("list");
+  revealTop(ui.list);
+  if (open !== null) openDetail(open, "replace");
   map.setHeatmap({ lat: lat.toFixed(4), lon: lon.toFixed(4), align: p.align, exclude_km: String(p.exclude) });
   if (fit === "never") return;
   await pinned;
@@ -248,7 +267,10 @@ async function runQuery(lat: number, lon: number, { fit = "always" } = {}) {
 
 // ---------------------------------------------------------------- rendering
 
-/** Show a /similar response in the panel and on the map; resolves once the pins are on the map. */
+/**
+ * Show a /similar response in the panel and on the map, leaving the view and selection to the
+ * caller; resolves once the pins are on the map.
+ */
 function render(data: SimilarResponse) {
   const q = data.query;
   const colors = matchColors(data.matches, heatStops);
@@ -278,24 +300,20 @@ function render(data: SimilarResponse) {
     const ruler = rulerLine(m, data.ruler, q.place);
     const difference = `Climate difference ${m.distance.toFixed(2)} (0 = identical): the gap between their standardized monthly features.`;
     const away = `<span class="meta"${ruler ? "" : ` title="${escapeHtml(difference)}"`}>${fmtDistance(m.km_from_query)} away</span>`;
-    li.innerHTML = `
+    li.innerHTML = `<button type="button" class="row">
       <span class="rank">${m.rank}</span>
       <span class="label" title="${escapeHtml(placeLabel(m.place, m.cell))}">${placeLinesHtml(m.place, m.cell)}${away}</span>
       <span class="flags">${shift}</span>
-      ${ruler ? `<span class="meta ruler" title="${escapeHtml(ruler.title)}">${escapeHtml(ruler.text)}</span>` : ""}`;
+      ${ruler ? `<span class="meta ruler" title="${escapeHtml(ruler.title)}">${escapeHtml(ruler.text)}</span>` : ""}</button>`;
     // Mouse only: a tap would leave the row and its pin highlighted, with no "leave" to clear them.
     li.addEventListener("pointerenter", (e) => e.pointerType === "mouse" && hover(m.rank));
     li.addEventListener("pointerleave", (e) => e.pointerType === "mouse" && hover(null));
-    li.addEventListener("click", () => select(m.rank));
+    li.firstElementChild!.addEventListener("click", () => select(m.rank));
     ui.results.append(li);
   }
 
   map.setQuery(q.cell.lat, q.cell.lon);
-  const pinned = map.setMatches(data.matches, colors);
-  selectedRank = null;
-  ui.compare.hidden = true;
-  ui.compare.innerHTML = "";
-  return pinned;
+  return map.setMatches(data.matches, colors);
 }
 
 function showComparison(match: Match) {
@@ -307,8 +325,8 @@ function showComparison(match: Match) {
     verdictName: queryName(current.query.place) ?? "your spot", // as the results' comparison lines name it
     matchLines: placeLines(match.place, match.cell),
   };
-  ui.compare.hidden = false; // before rendering: the charts take the panel's width
-  renderComparison(ui.compare, current.query, match, labels);
+  renderComparison(ui.compare, current.query, match, labels); // once shown: the charts take its width
+  ui.compare.querySelector("h3")!.tabIndex = -1; // focused on opening, for screen readers
   comparedWidth = ui.compare.clientWidth;
 }
 
@@ -316,7 +334,7 @@ function showComparison(match: Match) {
 let comparedWidth: number | null = null;
 new ResizeObserver(() => {
   const match = current?.matches.find((m) => m.rank === selectedRank);
-  if (match && !ui.compare.hidden && ui.compare.clientWidth !== comparedWidth) showComparison(match);
+  if (match && !ui.detail.hidden && ui.compare.clientWidth !== comparedWidth) showComparison(match);
 }).observe(ui.compare);
 
 function hover(rank: number | null) {
@@ -324,20 +342,128 @@ function hover(rank: number | null) {
   for (const li of resultRows()) li.classList.toggle("hover", Number(li.dataset.rank) === rank);
 }
 
-function select(rank: number) {
-  const match = current?.matches.find((m) => m.rank === rank);
-  if (!match) return;
+/** Mark one match's row and pin as the selected one (or none). */
+function markSelected(rank: number | null) {
   selectedRank = rank;
   map.markMatch("selected", rank);
   for (const li of resultRows()) {
     const on = Number(li.dataset.rank) === rank;
     li.classList.toggle("selected", on);
-    if (on) li.scrollIntoView({ block: "nearest" });
+    const row = li.querySelector(".row");
+    if (on) row?.setAttribute("aria-current", "true");
+    else row?.removeAttribute("aria-current");
   }
-  map.focusMatch(rank);
-  showComparison(match);
-  ui.compare.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
+
+function setView(view: "list" | "detail") {
+  ui.list.hidden = view !== "list";
+  ui.detail.hidden = view !== "detail";
+}
+
+/** Scroll the panel up to `el`'s top if it's above the panel's view. */
+function revealTop(el: HTMLElement) {
+  const above = el.getBoundingClientRect().top - ui.panel.getBoundingClientRect().top;
+  if (above < 0) ui.panel.scrollTop += above;
+}
+
+/** A match from a row or a pin: its comparison, in place of the list (the browser's back closes it). */
+function select(rank: number) {
+  openDetail(rank, ui.detail.hidden ? "push" : "replace");
+  map.focusMatch(rank);
+}
+
+/**
+ * Show a match's comparison in place of the list, recording it in a new history entry ("push"), the
+ * current one ("replace") or neither (null: the entry already says so).
+ */
+function openDetail(rank: number, record: "push" | "replace" | null) {
+  const matches = current?.matches ?? [];
+  const i = matches.findIndex((m) => m.rank === rank);
+  if (i < 0) return;
+  if (record === "push") history.pushState({ detail: rank }, "");
+  if (record === "replace") history.replaceState({ detail: rank }, "");
+  const opening = ui.detail.hidden;
+  if (opening) listScroll = ui.panel.scrollTop;
+  const focused = document.activeElement;
+  const fromWithin = ui.detail.contains(focused) || focused === document.body; // before the heading is redrawn
+  markSelected(rank);
+  setView("detail");
+  showComparison(matches[i]);
+  ui.prev.disabled = i === 0;
+  ui.next.disabled = i === matches.length - 1;
+  ui.position.textContent = `${i + 1} of ${matches.length}`;
+  showNeighbour(ui.pagerPrev, matches[i - 1], `<span aria-hidden="true">‹</span> Previous`);
+  showNeighbour(ui.pagerNext, matches[i + 1], `Next <span aria-hidden="true">›</span>`);
+  revealTop(ui.detail);
+  // The heading takes focus on opening, and on a step from within the comparison, unless from a step
+  // button at the top that's still there to press again (a pin keeps the map's focus).
+  const keep = (focused === ui.prev || focused === ui.next) && !(focused as HTMLButtonElement).disabled;
+  if (opening || (fromWithin && !keep)) {
+    ui.compare.querySelector("h3")!.focus({ preventScroll: true });
+  }
+}
+
+/** A pager button at the foot of the comparison: the neighbouring match by rank, if there is one. */
+function showNeighbour(button: HTMLButtonElement, match: Match | undefined, direction: string) {
+  button.hidden = !match;
+  if (!match) return;
+  button.style.setProperty("--rank-color", resultRow(match.rank)?.style.getPropertyValue("--rank-color") ?? null);
+  button.innerHTML = `<span class="direction">${direction}</span>
+    <span class="name"><span class="rank">${match.rank}</span> ${escapeHtml(placeLines(match.place, match.cell)[0])}</span>`;
+}
+
+/** Step through the matches by rank, from the comparison. */
+function step(by: number) {
+  const matches = current?.matches ?? [];
+  const next = matches[matches.findIndex((m) => m.rank === selectedRank) + by];
+  if (next) select(next.rank);
+}
+
+/** Back from a comparison to the list, where it was scrolled, keeping its match's row in view. */
+function showList() {
+  if (ui.detail.hidden) return;
+  const refocus = ui.detail.contains(document.activeElement) || document.activeElement === document.body;
+  setView("list");
+  ui.panel.scrollTop = listScroll;
+  const row = resultRow(selectedRank)?.querySelector<HTMLElement>(".row");
+  row?.scrollIntoView({ block: "nearest" });
+  if (refocus) row?.focus({ preventScroll: true });
+}
+
+/** Close the comparison: by going back in history if opening it added an entry. */
+function closeDetail() {
+  if (history.state?.detail != null) history.back();
+  else showList();
+}
+
+ui.back.addEventListener("click", closeDetail);
+ui.prev.addEventListener("click", () => step(-1));
+ui.next.addEventListener("click", () => step(1));
+ui.pagerPrev.addEventListener("click", () => step(-1));
+ui.pagerNext.addEventListener("click", () => step(1));
+
+const modified = (e: KeyboardEvent) => e.altKey || e.ctrlKey || e.metaKey || e.shiftKey;
+
+// ← and → step through the matches while the comparison has focus (it holds no inputs).
+ui.detail.addEventListener("keydown", (e) => {
+  if (modified(e) || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+  e.preventDefault();
+  step(e.key === "ArrowLeft" ? -1 : 1);
+});
+
+// Esc closes the comparison, except in the search box (where it closes the suggestions).
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || modified(e) || ui.detail.hidden || e.target === ui.search) return;
+  closeDetail();
+});
+
+// Back and forward: between the list and a comparison of the same query, or (when a query has since
+// replaced the entry's) to the query in the URL.
+window.addEventListener("popstate", (e) => {
+  if (location.search !== shownSearch) initFromUrl();
+  else if (e.state?.detail != null) openDetail(e.state.detail, null);
+  else showList();
+});
 
 // ---------------------------------------------------------------- search box
 
@@ -470,29 +596,24 @@ function showUnits() {
   ui.suppressOut.textContent = fmtSliderKm(ui.suppress.value);
 }
 
-// Switching units re-renders the last response (keeping the selection) without refetching.
+// Switching units re-renders the last response (keeping the view and selection) without refetching.
 ui.units.addEventListener("click", (e) => {
   const value = (e.target as Element).closest("button")?.dataset.units;
   if (!value || value === units()) return;
   setUnits(value);
   showUnits();
   if (!current) return;
-  const rank = selectedRank;
-  const scroll = ui.results.scrollTop;
+  const scroll = ui.panel.scrollTop;
   render(current);
-  ui.results.scrollTop = scroll;
-  const match = current.matches.find((m) => m.rank === rank);
-  if (match) {
-    selectedRank = rank;
-    map.markMatch("selected", rank);
-    for (const li of resultRows()) li.classList.toggle("selected", Number(li.dataset.rank) === rank);
-    showComparison(match);
-  }
+  if (ui.detail.hidden) markSelected(selectedRank);
+  else openDetail(selectedRank!, null);
+  ui.panel.scrollTop = scroll;
 });
 
 // ---------------------------------------------------------------- startup
 
-function initFromUrl() {
+/** Run the URL's query, opening match `open` (a reloaded comparison) or else the list. */
+function initFromUrl(open: number | null = null) {
   const u = new URLSearchParams(location.search);
   const num = (k: string) => (u.has(k) && u.get(k) !== "" && Number.isFinite(Number(u.get(k))) ? Number(u.get(k)) : null);
   const exclude = num("exclude");
@@ -504,7 +625,7 @@ function initFromUrl() {
 
   const lat = num("lat");
   const lon = num("lon");
-  if (lat !== null && lon !== null) runQuery(lat, lon); // eases from the world view to the results
+  if (lat !== null && lon !== null) runQuery(lat, lon, { open }); // eases from the world view to the results
 }
 
 // The heatmap's colour stops, which also colour the results' ranks (null: they fall back to one colour).
@@ -517,4 +638,4 @@ const legendReady = fetch("/heatmap/legend")
   })
   .catch((err) => console.warn("No heatmap legend:", err.message));
 
-initFromUrl();
+initFromUrl(history.state?.detail ?? null);

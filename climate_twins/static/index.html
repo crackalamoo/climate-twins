@@ -54,11 +54,27 @@
 
     <p id="message" class="message" hidden></p>
 
-    <section id="query-summary" hidden></section>
+    <!-- One match at a time, Google Maps style: the list, or one match's comparison in its place -->
+    <div id="list" class="view">
+      <section id="query-summary" hidden></section>
+      <ol id="results"></ol>
+    </div>
 
-    <ol id="results"></ol>
-
-    <section id="compare" hidden></section>
+    <section id="detail" class="view" hidden>
+      <nav class="detail-nav" aria-label="Climate twins">
+        <button id="back" class="back" type="button">← All twins</button>
+        <span class="stepper">
+          <button id="prev" type="button" aria-label="Previous twin" title="Previous twin (←)">‹</button>
+          <span id="position"></span>
+          <button id="next" type="button" aria-label="Next twin" title="Next twin (→)">›</button>
+        </span>
+      </nav>
+      <div id="compare"></div>
+      <nav class="pager" aria-label="Neighbouring twins">
+        <button id="pager-prev" class="prev-twin" type="button"></button>
+        <button id="pager-next" class="next-twin" type="button"></button>
+      </nav>
+    </section>
 
     <!-- GeoNames is CC BY: credit it beside the names it supplies. The basemap's credit is the map's. -->
     <footer class="credits">
