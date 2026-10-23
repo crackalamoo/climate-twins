@@ -2,7 +2,8 @@
 
 Reads three files from https://download.geonames.org/export/dump/ (see README):
 cities500.txt, admin1CodesASCII.txt and countryInfo.txt. Parsed once into a compact
-places.npz cache next to them, which is rebuilt whenever a source file is newer.
+places.npz cache next to them, which is rebuilt whenever a source file is newer; a deployment
+can ship the cache alone.
 Where a point is (its country and region) comes from boundary polygons (boundaries.py).
 Search matches a place's name, optionally followed by its region and/or country
 ("Portland, Oregon", "Paris France", "Portland OR, USA"), as GeoNames names and codes them,
@@ -352,18 +353,23 @@ def _unpack(blob: np.ndarray) -> list[str]:
     return blob.tobytes().decode("utf-8").split("\n")
 
 
-def _load_columns(directory: Path) -> dict[str, np.ndarray]:
+def _load_columns(directory: Path) -> dict[str, np.ndarray] | None:
+    """The cache if it's current (no source file is newer; missing ones can't be), else the sources
+    parsed and cached; None if neither is there."""
     sources = [directory / f for f in (CITIES_FILE, ADMIN1_FILE, COUNTRY_FILE)]
+    present = [p for p in sources if p.is_file()]
     cache = directory / CACHE_FILE
-    newest = max(p.stat().st_mtime for p in sources)
-    if cache.exists() and cache.stat().st_mtime >= newest:
+    if cache.is_file() and all(cache.stat().st_mtime >= p.stat().st_mtime for p in present):
         try:
             with np.load(cache, allow_pickle=False) as z:
                 cols = {k: z[k] for k in z.files}
             if int(cols.get("version", -1)) == CACHE_VERSION:
                 return cols
+            log.warning("ignoring %s from another version", cache)
         except (OSError, ValueError, KeyError) as e:
             log.warning("ignoring unreadable %s: %s", cache, e)
+    if len(present) < len(sources):
+        return None
     cols = _parse(directory)
     try:
         fd, tmp = tempfile.mkstemp(dir=directory, suffix=".npz.tmp")
@@ -430,11 +436,13 @@ class Places:
     def load(cls, directory: Path, boundaries: Boundaries | None = None) -> "Places | None":
         """Places from a GeoNames directory, or None (with a warning) if files are missing.
         Labels only say which country and region a point is in (`area`) with boundaries."""
-        missing = [f for f in (CITIES_FILE, ADMIN1_FILE, COUNTRY_FILE) if not (directory / f).is_file()]
-        if missing:
-            log.warning("GeoNames files missing from %s (%s): place names disabled", directory, ", ".join(missing))
+        cols = _load_columns(directory)
+        if cols is None:
+            missing = [f for f in (CITIES_FILE, ADMIN1_FILE, COUNTRY_FILE) if not (directory / f).is_file()]
+            log.warning("GeoNames files missing from %s (%s) and no current %s: place names disabled",
+                        directory, ", ".join(missing), CACHE_FILE)
             return None
-        return cls(_load_columns(directory), boundaries)
+        return cls(cols, boundaries)
 
     def __len__(self) -> int:
         return len(self.lat)

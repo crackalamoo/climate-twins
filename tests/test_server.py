@@ -1,5 +1,8 @@
 import io
+import threading
+import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from html import unescape
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +17,8 @@ from climate_twins.features import VARIANCE_TARGET
 from climate_twins.index import MONTHLY_VARS
 from climate_twins.places import Places
 import climate_twins.server as server
-from climate_twins import page
+from climate_twins import page, preview
+from climate_twins.index import QueryCache
 from climate_twins.geo import great_circle_km
 from climate_twins.server import app
 
@@ -138,6 +142,42 @@ def test_preview_card(client: TestClient):
     for params in ({"lat": "x", "lon": "y"}, {"lat": 0, "lon": -30}, {"lat": 95, "lon": 0}):
         assert card(client.get("/preview.png", params=params)) == site
     assert card(client.get("/preview.png", params={"lat": NC_QUERY[0], "lon": NC_QUERY[1], "exclude": "x"})) != site
+
+
+def test_concurrent_first_cards_build_each_plate_once(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(preview, "_plates", QueryCache(2))
+    build, builds = preview.Plate.build, []
+
+    def slow_build(*args):
+        builds.append(args)
+        time.sleep(0.2)
+        return build(*args)
+
+    monkeypatch.setattr(preview.Plate, "build", slow_build)
+    index = client.app.state.index
+    with ThreadPoolExecutor(4) as pool:
+        plates = list(pool.map(lambda _: preview.plate(index, None, 1), range(4)))
+    assert len(builds) == 1 and all(p is plates[0] for p in plates)
+
+
+def test_heavy_requests_run_two_at_a_time(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    index = client.app.state.index
+    similar, lock, running, most = index.similar, threading.Lock(), [0], [0]
+
+    def slow_similar(*args, **kwargs):
+        with lock:
+            running[0] += 1
+            most[0] = max(most[0], running[0])
+        time.sleep(0.1)
+        with lock:
+            running[0] -= 1
+        return similar(*args, **kwargs)
+
+    monkeypatch.setattr(index, "similar", slow_similar)
+    params = {"lat": NC_QUERY[0], "lon": NC_QUERY[1], "n": 2}
+    with ThreadPoolExecutor(6) as pool:
+        statuses = list(pool.map(lambda _: client.get("/similar", params=params).status_code, range(6)))
+    assert statuses == [200] * 6 and most[0] == server.HEAVY_REQUESTS
 
 
 def test_page_previews_with_its_card(client: TestClient):

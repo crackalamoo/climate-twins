@@ -170,10 +170,12 @@ class ClimateIndex:
             grid=Grid(**meta["grid"]),
             codecs={v: RawCodec(**c) for v, c in meta["codecs"].items()},
             model=FeatureModel.from_dict(meta["model"]),
-            cells=np.load(path / "cells.npy"),
-            # Raw values are only read for a handful of cells per query: leave them on disk.
+            # Memory-mapped: the OS keeps what's read in its page cache, which it can drop under memory
+            # pressure where a loaded copy couldn't be. Raw values are only read for a handful of cells
+            # per query; cells and pcs are read throughout, and are as fast once cached.
+            cells=np.load(path / "cells.npy", mmap_mode="r"),
             raw={v: np.load(path / f"raw_{v}.npy", mmap_mode="r") for v in RAW_VARS},
-            pcs=np.load(path / "pcs.npy"),
+            pcs=np.load(path / "pcs.npy", mmap_mode="r"),
             sample=np.load(path / "sample.npy"),
             meta={k: v for k, v in meta.items() if k != "model"},
         )

@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw, ImageFont, features
 
 from . import page, tiles
 from .boundaries import Boundaries
-from .index import ClimateIndex, Query
+from .index import ClimateIndex, Query, QueryCache
 
 WIDTH, HEIGHT = page.IMAGE_SIZE
 HERE = Path(__file__).resolve().parent
@@ -318,9 +318,19 @@ def set_headline(text: str) -> tuple[ImageFont.FreeTypeFont, list[str]]:
     return font, lines
 
 
-@functools.lru_cache(maxsize=2)  # cards with one headline line and with two
+# Cards with one headline line and with two. A plate takes ~2 s and ~300 MB to build: concurrent
+# first cards build it once.
+_plates = QueryCache(2)
+
+
 def plate(index: ClimateIndex, boundaries: Boundaries | None, lines: int) -> Plate:
-    return Plate.build(index, boundaries, lines)
+    return _plates.get((index, boundaries, lines), lambda: Plate.build(index, boundaries, lines))
+
+
+def warm(index: ClimateIndex, boundaries: Boundaries | None) -> None:
+    """Build both plates ahead of the first cards."""
+    for lines in (1, 2):
+        plate(index, boundaries, lines)
 
 
 def render(

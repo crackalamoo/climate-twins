@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 
+import anyio
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, Path as PathParam, Query, Request, Response
@@ -36,6 +37,8 @@ from . import page, preview, tiles
 from .index import DEFAULT_EXCLUDE_KM, MAX_SNAP_KM, Align, ClimateIndex, NoLandError
 from .boundaries import Boundaries
 from .places import CITY_KM, Places
+
+log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATA = ROOT / "data" / "processed"
@@ -61,6 +64,10 @@ RULER_MIN_POPULATION = 500_000
 # "About as close" as a ruler city: a match's distance within this fraction of the city's, either
 # way. A judgment call: distances within ~10% are hard to tell apart in the charts.
 RULER_BAND = 0.1
+# Searches, pages and preview cards each need up to ~600 MB on top of the index's ~0.6 GB (a
+# /similar for 200 matches 1000 km apart): this many run at once and the rest wait, so a burst of
+# them can't run a 2 GB server out of memory.
+HEAVY_REQUESTS = 2
 
 Lat = Annotated[float, Query(ge=-90, le=90)]
 Lon = Annotated[float, Query(ge=-180, le=180)]
@@ -69,11 +76,37 @@ Lon = Annotated[float, Query(ge=-180, le=180)]
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     t0 = time.time()
-    app.state.index = ClimateIndex.load(Path(os.environ.get("CLIMATE_TWINS_DATA", DEFAULT_DATA)))
+    app.state.heavy = anyio.CapacityLimiter(HEAVY_REQUESTS)
+    app.state.index = index = ClimateIndex.load(Path(os.environ.get("CLIMATE_TWINS_DATA", DEFAULT_DATA)))
     boundaries = Boundaries.load(Path(os.environ.get("CLIMATE_TWINS_BOUNDARIES", DEFAULT_BOUNDARIES)))
     app.state.places = Places.load(Path(os.environ.get("CLIMATE_TWINS_GEONAMES", DEFAULT_GEONAMES)), boundaries)
     app.state.load_seconds = round(time.time() - t0, 1)
-    yield
+    # The preview cards' base maps, built while the server already answers: as a heavy request,
+    # and a card that comes first waits for them rather than building its own.
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(warm_previews, app.state.heavy, index, boundaries)
+        yield
+
+
+async def warm_previews(limiter: anyio.CapacityLimiter, index: ClimateIndex, boundaries: Boundaries | None) -> None:
+    t0 = time.time()
+    try:
+        await anyio.to_thread.run_sync(preview.warm, index, boundaries, limiter=limiter)
+    except Exception:  # cards then build them when first asked for
+        log.exception("could not build the preview base maps")
+    else:
+        log.info("preview base maps built in %.1f s", time.time() - t0)
+
+
+def heavy(route):
+    """Run a sync route as FastAPI would, in a worker thread, but at most HEAVY_REQUESTS at a time.
+    Requests over the cap wait their turn without taking a thread from the cheap routes' pool."""
+
+    @functools.wraps(route)
+    async def run(**kwargs):
+        return await anyio.to_thread.run_sync(functools.partial(route, **kwargs), limiter=kwargs["request"].app.state.heavy)
+
+    return run
 
 
 def place_label(request: Request, lat: float, lon: float) -> dict | None:
@@ -178,6 +211,7 @@ def climate(request: Request, lat: Lat, lon: Lon) -> dict:
 
 
 @app.get("/similar")
+@heavy
 def similar(
     request: Request,
     lat: Lat,
@@ -313,6 +347,7 @@ def page_labels(request: Request, q: PageQuery | None) -> tuple[dict, list] | No
 
 
 @app.get("/", response_class=HTMLResponse)
+@heavy
 def index_page(request: Request) -> Response:
     """The web UI, its <head> describing the query in the URL (page.py). Revalidated like the
     static files."""
@@ -342,6 +377,7 @@ def cached_preview(index: ClimateIndex, places: Places | None, q: PageQuery | No
 
 
 @app.get("/preview.png", response_class=Response)
+@heavy
 def preview_image(request: Request) -> Response:
     """The page's link-preview card (preview.py) for the query in the URL, read as the page reads it:
     the site's where the page describes the site."""
@@ -365,7 +401,10 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Serve the Climate Twins API.")
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
-    p.add_argument("--data", type=Path, default=DEFAULT_DATA, help="index directory from climate-twins-build")
+    p.add_argument(
+        "--data", type=Path, default=Path(os.environ.get("CLIMATE_TWINS_DATA", DEFAULT_DATA)),
+        help="index directory from climate-twins-build (default: $CLIMATE_TWINS_DATA, else data/processed)",
+    )
     args = p.parse_args()
     os.environ["CLIMATE_TWINS_DATA"] = str(args.data)
     logging.basicConfig(level=logging.INFO)

@@ -424,6 +424,16 @@ def test_cache_is_used_and_rebuilt_when_stale(tmp_path: Path):
     assert Places.load(d).search("porto")[0]["population"] == 9_000_000
 
 
+def test_cache_alone_is_used(tmp_path: Path):
+    d = write_geonames(tmp_path / "g")
+    expected = Places.load(d).search("porto")
+    for f in d.glob("*.txt"):
+        f.unlink()
+    assert Places.load(d).search("porto") == expected
+    (d / CACHE_FILE).unlink()
+    assert Places.load(d) is None
+
+
 @pytest.mark.parametrize("region, city, repeats", [
     ("Mykolaiv", "Mykolayiv|Mykolaiv|Nikolaev", True),  # a spelling from GeoNames' alternate names
     ("Ho Chi Minh City (HCMC)", "Ho Chi Minh City", True),
