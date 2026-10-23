@@ -1,0 +1,16 @@
+# Only what the image builds from: no data, local builds, caches or virtualenvs.
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.json
+!web/
+!pyproject.toml
+!uv.lock
+!.python-version
+!README.md
+!LICENSE
+!climate_twins/
+climate_twins/static/app.*
+climate_twins/static/maplibre-gl-*
+**/__pycache__
