@@ -200,7 +200,7 @@ button {
 
 /* headline */
 .intro h1 { margin: 0; font: 400 28px/1.1 var(--serif); letter-spacing: -0.005em; }
-.intro p { margin: 6px 0 0; font: italic 14px/1.4 var(--serif); color: var(--muted); }
+.intro p { margin: 6px 0 0; font: 14px/1.4 var(--serif); color: var(--muted); }
 
 /* first load: the headline, the search box and one line */
 .start { line-height: 1.45; }
@@ -211,7 +211,7 @@ button {
 #query-summary h2 { margin: 0; font-size: 16px; font-weight: 400; }
 #query-summary h2 .star { color: var(--query); font-size: 18px; vertical-align: 6px; margin-right: 2px; }
 #query-summary h2 .primary { font: 400 30px/1.1 var(--serif); letter-spacing: -0.01em; }
-#query-summary h2 .secondary { display: block; margin-top: 4px; font: italic 15px/1.3 var(--serif); color: var(--muted); }
+#query-summary h2 .secondary { display: block; margin-top: 4px; font: 15px/1.3 var(--serif); }
 #query-summary .coords { margin-top: 2px; color: var(--muted); font-size: 11px; letter-spacing: 0.02em; }
 
 .stats {
@@ -334,7 +334,7 @@ button {
 #compare h3 { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; align-items: baseline; margin: 0 0 6px; font-size: 15px; font-weight: 400; }
 #compare h3 .rank { grid-row: span 2; font: 400 22px/1 var(--serif); color: var(--match); }
 #compare h3 .primary { font: 400 22px/1.2 var(--serif); }
-#compare h3 .secondary { grid-column: 2; margin-top: 3px; font: italic 14px/1.3 var(--serif); color: var(--muted); }
+#compare h3 .secondary { grid-column: 2; margin-top: 3px; font: 14px/1.3 var(--serif); }
 #compare .note { font-size: 12px; color: var(--muted); margin: 2px 0; }
 #compare .verdict { margin: 12px 0 10px; font: 400 15px/1.5 var(--serif); }
 .nowrap { white-space: nowrap; }
