@@ -39,6 +39,9 @@ const MIN_LAG_MONTHS = 0.5;
 // The query has a summer and winter when its warmest and coldest months differ by this much (°C,
 // daily mean); else its seasons, if any, are wet and dry.
 const SEASONAL_RANGE_C = 6;
+// Winters are milder or colder when the colder of the two averages below this (°C, daily mean); both
+// warmer, they're just warmer or cooler.
+const COLD_WINTER_C = 15;
 // ...and wet and dry seasons when its wettest 3 months get this many times its driest 3's rain (each
 // plus the precipitation feature's 15 mm, so a desert's 2 mm vs 0 mm isn't a wet season).
 const WET_DRY_RATIO = 2;
@@ -270,15 +273,17 @@ function pattern(f: Factor, s: Seasons | null): Pattern {
   return { explained: best.ss / total, phrase: best.phrase };
 }
 
+const andList = (xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}` : xs[0]);
 const sizeWord = (d2: number) => SIZE_WORDS.find(([min]) => d2 >= min)?.[1] ?? "slightly";
 
 /**
  * A terse verdict on how the match's climate differs from the query's, e.g. "Nearly identical
  * temperatures. Slightly sunnier." One sentence per factor with a clear pattern, the largest first,
  * sized on the search's own scale, but the factors that differ by season share one ("Cooler, drier
- * summers; milder, wetter winters."); a near-twin is "Very similar." and its largest difference.
- * When nothing else is said, a clear difference with no simple pattern is named: "Rainfall differs
- * through the year." Null without `monthly` on both and the match's `difference_d2`.
+ * summers; milder, wetter winters."). A clear difference with no simple pattern, bigger than any
+ * named, is named too: "Rainfall differs through the year." A near-twin, judged on the whole
+ * difference, is "Very similar." and its largest difference.
+ * Null without `monthly` on both and the match's `difference_d2`.
  */
 export function verdict(query: QueryPoint, match: Match): string | null {
   const q = query.monthly;
@@ -299,7 +304,9 @@ export function verdict(query: QueryPoint, match: Match): string | null {
       timing: s?.temperate ? { cycle: s.cycle, lag: lagMonths(tmean(m), tmean(q)), season: "summer" } : undefined,
       words: {
         key: "temperature", up: "warmer", down: "cooler", noun: "temperature",
-        seasonal: ["warmer", "cooler", "milder", "colder"],
+        seasonal: s?.temperate && Math.min(over(tmean(q), s.lo), over(tmean(m), s.lo)) < COLD_WINTER_C
+          ? ["warmer", "cooler", "milder", "colder"]
+          : ["warmer", "cooler", "warmer", "cooler"],
       },
     },
     {
@@ -322,16 +329,21 @@ export function verdict(query: QueryPoint, match: Match): string | null {
   let shown = ranked.filter((f) => f.clear >= NEGLIGIBLE_D2 && f.clear >= MINOR_FRACTION * ranked[0].clear);
   // Wind rarely shapes how a climate feels: only a big difference, or the only one, is worth saying.
   shown = shown.filter((f) => !f.wind || f.clear >= MUCH_D2 || shown.length === 1);
-  if (!shown.length) {
-    // Small differences mean the climates match; a clear one with no simple pattern is named, and
-    // the charts show it.
-    const largest = factors.reduce((a, b) => (b.d2 > a.d2 ? b : a));
-    if (largest.d2 < NEGLIGIBLE_D2) return "Nearly identical climates.";
-    if (largest.d2 < CLEAR_D2) return "Very similar climates.";
-    return `${largest.words.noun[0].toUpperCase()}${largest.words.noun.slice(1)} differs through the year.`;
+  // How alike the climates are is judged on the whole difference, not just what has a pattern to name.
+  const total = sum(factors.map((f) => f.d2));
+  const largest = factors.reduce((a, b) => (b.d2 > a.d2 ? b : a));
+  // A clear difference with no simple pattern is named when it's bigger than any the verdict names,
+  // and the charts show it.
+  const named = Math.max(0, ...shown.map((f) => f.d2));
+  let unpatterned = factors.filter((f) => f.explained < MIN_EXPLAINED && f.d2 > named
+    && f.d2 >= (f.wind ? MUCH_D2 : CLEAR_D2));
+  if (!shown.length && !unpatterned.length) {
+    if (total < NEGLIGIBLE_D2) return "Nearly identical climates.";
+    if (total < CLEAR_D2) return "Very similar climates.";
+    unpatterned = [largest];
   }
-  // A near-twin (every difference slight): say so, and give only its largest difference.
-  const near = shown.every((f) => f.clear < CLEAR_D2);
+  // A near-twin: say so, and give only its largest difference.
+  const near = total < CLEAR_D2;
   if (near) shown = shown.slice(0, 1);
   const said = new Map(shown.map((f) => [f, f.phrase!(sizeWord(f.clear))]));
   // The seasonal words, in the factors' order, said where the largest of them would be.
@@ -345,6 +357,7 @@ export function verdict(query: QueryPoint, match: Match): string | null {
   const sentences = [
     ...(near ? ["very similar"] : temperature.d2 < NEGLIGIBLE_D2 ? ["nearly identical temperatures"] : []),
     ...phrases,
+    ...(unpatterned.length ? [`${andList(unpatterned.map((f) => f.words.noun))} ${unpatterned.length > 1 ? "differ" : "differs"} through the year`] : []),
   ];
   return sentences.map((t) => `${t[0].toUpperCase()}${t.slice(1)}.`).join(" ");
 }
