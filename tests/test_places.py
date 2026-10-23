@@ -54,8 +54,11 @@ class TestLabel:
         p = places.label_for(33.0, 87.0)  # nearest village is miscoded as Hebei; the polygon says Tibet
         assert p["tier"] == "region" and p["label"] == "in Tibet, China"
 
+    def test_region_repeating_the_city_is_left_out_of_labels_and_search(self, places: Places):
+        assert places.label_for(56.0, 92.9)["label"] == "Krasnoyarsk, Russia"
+        assert places.search("krasno")[0]["label"] == "Krasnoyarsk, Russia"
+
     @pytest.mark.parametrize("lat, lon, query", [
-        (56.0, 92.9, "krasno"),  # Krasnoyarsk Krai repeats the city
         (26.6, 12.8, "ubari"),  # Libya's regions are not shown
         (26.6, 14.0, "ubari"),  # nor when the label is an offset from the city
     ])

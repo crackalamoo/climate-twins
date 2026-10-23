@@ -132,18 +132,18 @@ def _name_words(text: str) -> list[str]:
     return ["saint" if w == "st" else w for w in _plain_words(text)]
 
 
-def region_repeats_city(region: str, name: str, *spellings: str) -> bool:
+def region_repeats_city(region: str, name: str, *spellings: str, in_part: bool = True) -> bool:
     """True when the region is just the city's name with an admin word: "Sabha District",
-    "Ho Chi Minh City (HCMC)", "Krasnoyarsk Krai", "St.-Petersburg", "Tucuman" for San Miguel
-    de Tucumán, "Arkhangelskaya" for Arkhangel'sk; or exactly another spelling of it
-    ("Cuzco" for Cusco)."""
+    "Ho Chi Minh City (HCMC)", "Krasnoyarsk Krai", "St.-Petersburg", "Arkhangelskaya" for
+    Arkhangel'sk; or exactly another spelling of it ("Cuzco" for Cusco). With in_part, also when
+    it's part of the city's name: "Tucuman" for San Miguel de Tucumán, "New York" for New York Mills."""
     def key(text: str) -> str:
         return " ".join(w for w in _name_words(text) if w not in _ADMIN_WORDS)
 
     r, c = key(region.split("(")[0]), key(name)
     if not r or not c:
         return False
-    if r == c or c.startswith(r + " ") or c.endswith(" " + r):
+    if r == c or in_part and (c.startswith(r + " ") or c.endswith(" " + r)):
         return True
     if len(c) >= 5 and r.startswith(c) and len(r) - len(c) <= 3:  # an inflected form: -skaya, -ia
         return True
@@ -635,16 +635,23 @@ class Places:
             return False
         return city is None or not region_repeats_city(admin1, city, *spellings)
 
+    def _spellings_of(self, i: int) -> tuple[str, ...]:
+        return (self.asciiname[i], *self.alt_names[i].split("|"))
+
     def _label_region(self, i: int) -> str:
         """Place i's region as its label shows it, or "" where labels hide it (_shows_region)."""
-        spellings = (self.asciiname[i], *self.alt_names[i].split("|"))
-        return self.admin1[i] if self._shows_region(self.country_code[i], self.admin1[i], self.name[i], spellings) else ""
+        return self.admin1[i] if self._shows_region(self.country_code[i], self.admin1[i], self.name[i],
+                                                    self._spellings_of(i)) else ""
 
     def describe(self, i: int, for_label: bool = False) -> dict:
-        """Place i's fields. Search results always show the region in base_label; labels
-        only where it helps (for_label, see _shows_region)."""
+        """Place i's fields. Search results show the region in base_label unless it's the place's own
+        name ("Ho Chi Minh City (HCMC)"), as there it tells same-named places apart (New York Mills, New
+        York and Minnesota); labels only where it helps (for_label, see _shows_region)."""
         name, admin1, country = self.name[i], self.admin1[i], self.country[i]
-        shown = self._label_region(i) if for_label else admin1
+        if for_label:
+            shown = self._label_region(i)
+        else:
+            shown = "" if admin1 and region_repeats_city(admin1, name, *self._spellings_of(i), in_part=False) else admin1
         parts: list[str] = []
         for p in (name, shown, country):
             if p and p not in parts:
@@ -717,4 +724,13 @@ class Places:
         order = np.lexsort((self._rank[place], -boost, -level, -weight))
         place = place[order]
         _, first = np.unique(place, return_index=True)  # each place at its best score
-        return [self.describe(int(i)) for i in place[np.sort(first)[:limit]]]
+        # Rows that read the same can't be told apart, so only the best-ranked of them is listed.
+        # GeoNames has such pairs where one is an error (a town near Nam Dinh named "Hanoi, Hanoi")
+        # and many that are villages of one name in one region; any of those is still a click away on the map.
+        results: dict[str, dict] = {}
+        for i in place[np.sort(first)]:
+            p = self.describe(int(i))
+            results.setdefault(p["label"], p)
+            if len(results) == limit:
+                break
+        return list(results.values())
