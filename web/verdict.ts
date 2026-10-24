@@ -31,13 +31,16 @@ const SIZE_WORDS: [number, string][] = [
 const MINOR_FRACTION = 1 / 3;
 // A factor's monthly gap is split into orthogonal patterns: an overall shift, a bigger or smaller
 // seasonal swing, seasons arriving later or earlier (temperature), and days vs nights (temperature).
-// The one explaining most of it is described, and sized by the part it explains. Under MIN_EXPLAINED
-// of the gap (month-to-month wobbles, no one pattern), the factor is left to the charts.
+// The one explaining most of it is described, but sized by the factor's whole gap, not just the part
+// it explains, so the words match what the search counts. Under MIN_EXPLAINED of the gap
+// (month-to-month wobbles, no one pattern), the factor is left to the charts.
 const MIN_EXPLAINED = 0.35;
 // A seasonal or day/night phrase must explain this many times what the overall shift alone does, or
 // the plain "warmer" is said instead.
 const RICHER_GAIN = 1.25;
-// Summer or the rainy season "comes later" only when its peak shifts by at least this many months.
+// Summer or the rainy season "comes later" only when its peak shifts by at least this many months. A
+// smaller shift of summer is cooler springs and warmer autumns (spring and autumn being the quarters
+// between the query's winter and summer).
 const MIN_LAG_MONTHS = 0.5;
 // The query has a summer and winter when its warmest and coldest months differ by this much (°C,
 // daily mean); else its seasons, if any, are wet and dry.
@@ -94,6 +97,7 @@ interface Timing {
   cycle: number[];
   lag: number;
   season: string;
+  springAutumn?: boolean;
 }
 
 interface Factor {
@@ -247,14 +251,17 @@ function pattern(f: Factor, s: Seasons | null): Pattern {
       });
     }
   }
-  if (timing && Math.abs(timing.lag) >= MIN_LAG_MONTHS) {
+  const lagged = timing && Math.abs(timing.lag) >= MIN_LAG_MONTHS;
+  if (timing && (lagged || timing.springAutumn)) {
     const [a, b] = harmonic(d);
     const [ua, ub] = timing.cycle;
     const shifted = b * ua - a * ub; // the same cycle, shifted later (+) or earlier
     const n = Math.round(Math.abs(timing.lag));
     candidates.push({
       ss: k * 6 * shifted * shifted,
-      phrase: () => `${timing.season} comes about ${n < 2 ? "a month" : `${n} months`} ${timing.lag > 0 ? "later" : "earlier"}`,
+      phrase: lagged
+        ? () => `${timing.season} comes about ${n < 2 ? "a month" : `${n} months`} ${timing.lag > 0 ? "later" : "earlier"}`
+        : (size) => sized(size, shifted > 0 ? `${words.down} springs and ${words.up} autumns` : `${words.up} springs and ${words.down} autumns`),
     });
   }
   if (k === 2) {
@@ -282,7 +289,7 @@ const sizeWord = (d2: number) => SIZE_WORDS.find(([min]) => d2 >= min)?.[1] ?? "
  * temperatures. Slightly sunnier." One sentence per factor with a clear pattern, the largest first,
  * sized on the search's own scale, but the factors that differ by season share one ("Cooler, drier
  * summers; milder, wetter winters."). A clear difference with no simple pattern, bigger than any
- * named, is named too: "Rainfall differs through the year." A near-twin, judged on the whole
+ * named, is named too: "Rainfall follows a different yearly pattern." A near-twin, judged on the whole
  * difference, is "Very similar." and its largest difference; a match with nothing close is "Very
  * different." first.
  * Null without `monthly` on both and the match's `difference_d2`.
@@ -303,7 +310,7 @@ export function verdict(query: QueryPoint, match: Match): string | null {
     {
       d2: d2.tmax + d2.tmin,
       series: [diff("tmax"), diff("tmin")],
-      timing: s?.temperate ? { cycle: s.cycle, lag: lagMonths(tmean(m), tmean(q)), season: "summer" } : undefined,
+      timing: s?.temperate ? { cycle: s.cycle, lag: lagMonths(tmean(m), tmean(q)), season: "summer", springAutumn: true } : undefined,
       words: {
         key: "temperature", up: "warmer", down: "cooler", noun: "temperature",
         seasonal: s?.temperate && Math.min(over(tmean(q), s.lo), over(tmean(m), s.lo)) < COLD_WINTER_C
@@ -327,10 +334,10 @@ export function verdict(query: QueryPoint, match: Match): string | null {
     Object.assign(f, pattern(f, s));
     f.clear = f.explained >= MIN_EXPLAINED ? f.d2 * f.explained : 0;
   }
-  const ranked = [...factors].sort((a, b) => b.clear - a.clear);
-  let shown = ranked.filter((f) => f.clear >= NEGLIGIBLE_D2 && f.clear >= MINOR_FRACTION * ranked[0].clear);
+  const ranked = factors.filter((f) => f.clear >= NEGLIGIBLE_D2).sort((a, b) => b.clear - a.clear);
   // Wind rarely shapes how a climate feels: only a big difference, or the only one, is worth saying.
-  shown = shown.filter((f) => !f.wind || f.clear >= MUCH_D2 || shown.length === 1);
+  const sayable = ranked.filter((f) => !f.wind || f.clear >= MUCH_D2 || ranked.length === 1);
+  let shown = sayable.filter((f) => f.clear >= MINOR_FRACTION * sayable[0].clear);
   // How alike the climates are is judged on the whole difference, not just what has a pattern to name.
   const total = sum(factors.map((f) => f.d2));
   const largest = factors.reduce((a, b) => (b.d2 > a.d2 ? b : a));
@@ -348,7 +355,7 @@ export function verdict(query: QueryPoint, match: Match): string | null {
   const near = total < CLEAR_D2;
   if (near) shown = shown.slice(0, 1);
   const far = total >= FAR_D2;
-  const said = new Map(shown.map((f) => [f, f.phrase!(sizeWord(f.clear))]));
+  const said = new Map(shown.map((f) => [f, f.phrase!(sizeWord(f.d2))]));
   // The seasonal words, in the factors' order, said where the largest of them would be.
   const seasonal = factors.flatMap((f) => { const x = said.get(f); return Array.isArray(x) ? x : []; });
   const first = shown.find((f) => Array.isArray(said.get(f)));
@@ -360,7 +367,7 @@ export function verdict(query: QueryPoint, match: Match): string | null {
   const sentences = [
     ...(near ? ["very similar"] : far ? ["very different"] : temperature.d2 < NEGLIGIBLE_D2 ? ["nearly identical temperatures"] : []),
     ...phrases,
-    ...(unpatterned.length ? [`${andList(unpatterned.map((f) => f.words.noun))} ${unpatterned.length > 1 ? "differ" : "differs"} through the year`] : []),
+    ...(unpatterned.length ? [`${andList(unpatterned.map((f) => f.words.noun))} ${unpatterned.length > 1 ? "follow different" : "follows a different"} yearly pattern${unpatterned.length > 1 ? "s" : ""}`] : []),
   ];
   return sentences.map((t) => `${t[0].toUpperCase()}${t.slice(1)}.`).join(" ");
 }
