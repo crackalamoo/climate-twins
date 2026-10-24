@@ -432,6 +432,34 @@ table.summary thead th { font-weight: 400; font-style: italic; border-bottom-col
 .legend .excluded { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-style: italic; }
 .legend .excluded .swatch { width: 14px; height: 7px; flex: none; }
 
+/* Until the visitor's first query: how to start, over the map below its middle, letting clicks
+   through. */
+.map-hint {
+  position: absolute;
+  top: 62%; /* its middle */
+  transform: translateY(-50%);
+  left: 0;
+  right: var(--panel-width);
+  width: max-content;
+  max-width: calc(100% - var(--panel-width) - 32px);
+  margin: 0 auto;
+  z-index: 4;
+  pointer-events: none;
+  background: rgb(251 248 241 / 0.94);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 5px 14px 6px;
+  font: 400 19px/1.25 var(--serif);
+  color: var(--text);
+  transition: opacity 1s;
+}
+.map-hint.fading { opacity: 0; }
+.map-hint:not(.linked) .more { display: none; }
+/* over results: aside, above the legend (its bottom, plus its 69px height, plus the gap at its left) */
+.map-hint.linked { top: auto; bottom: calc(28px + 69px + 10px); transform: none; left: 10px; right: auto; margin: 0; font-size: 16px; }
+.map-hint .coarse { display: none; }
+@media (pointer: coarse) { .map-hint .fine { display: none; } .map-hint .coarse { display: inline; } }
+
 /* MapLibre's controls, quietened to match: paper buttons and a serif attribution. The selectors
    match maplibre-gl.css's own, so that these, coming later, win. */
 .maplibregl-ctrl-group { background: var(--bg); border-radius: 2px; }
@@ -449,6 +477,7 @@ table.summary thead th { font-weight: 400; font-style: italic; border-bottom-col
    its bottom, so the legend moves to its top right. */
 @media (max-width: 1000px) {
   .legend { left: auto; right: calc(var(--panel-width) + 6px); top: 6px; bottom: auto; }
+  .map-hint.linked { bottom: 48px; }
 }
 
 /* Narrow screens, where the panel would take more than half the width: the map on top, the panel
@@ -474,4 +503,7 @@ table.summary thead th { font-weight: 400; font-style: italic; border-bottom-col
   /* top right of the map: the legend is placed against the page, and the panel fills its bottom */
   .legend { width: 196px; left: auto; right: 6px; top: 6px; bottom: auto; padding: 4px 8px 2px; font-size: 10px; }
   .legend .title { font-size: 9px; letter-spacing: 0.1em; white-space: nowrap; }
+  /* low on the short map, just above the attribution */
+  .map-hint { top: auto; bottom: calc(55dvh + 60px); transform: none; right: 0; max-width: calc(100% - 32px); padding: 4px 12px 5px; font-size: 16px; }
+  .map-hint.linked { bottom: calc(55dvh + 52px); left: 10px; font-size: 14px; }
 }

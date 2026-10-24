@@ -38,6 +38,7 @@ const ui = {
   pagerNext: $<HTMLButtonElement>("pager-next"),
   compare: $("compare"),
   legend: $("legend"),
+  mapHint: $("map-hint"),
 };
 const resultRows = () => ui.results.children as HTMLCollectionOf<HTMLLIElement>;
 const resultRow = (rank: number | null) => [...resultRows()].find((li) => Number(li.dataset.rank) === rank);
@@ -50,7 +51,10 @@ let listScroll = 0; // the panel's scroll position in the list, restored on comi
 let queryAbort: AbortController | null = null;
 
 const map = new ClimateMap("map", {
-  onClick: (lat, lon) => runQuery(lat, lon),
+  onClick: (lat, lon) => {
+    dismissHint();
+    runQuery(lat, lon);
+  },
   onMarkerClick: (rank) => select(rank),
   onMarkerHover: (rank) => hover(rank),
   overlays: [ui.legend],
@@ -160,6 +164,15 @@ function rulerLine(match: Match, ruler: Ruler, queryPlace: Place | null) {
 /** A slider's km value (the input's string), to the nearest 10 mi in US units. */
 function fmtSliderKm(km: string) {
   return fmtDistance(Number(km), { step: units() === "us" ? 10 : 1 });
+}
+
+/** Remove the map's how-to-start hint, for good: at once on the visitor's first query, or fading. */
+function dismissHint(fade = false) {
+  if (!fade) ui.mapHint.hidden = true;
+  else if (!ui.mapHint.hidden) {
+    ui.mapHint.classList.add("fading");
+    ui.mapHint.addEventListener("transitionend", () => (ui.mapHint.hidden = true), { once: true });
+  }
 }
 
 function showMessage(text: string, kind = "error") {
@@ -505,6 +518,7 @@ function choose(i: number) {
   if (!p) return;
   ui.search.value = p.label;
   closeSuggestions();
+  dismissHint();
   runQuery(p.lat, p.lon);
 }
 
@@ -561,6 +575,7 @@ ui.search.addEventListener("keydown", (e) => {
 ui.search.addEventListener("blur", closeSuggestions);
 
 ui.locate.addEventListener("click", () => {
+  dismissHint();
   if (!navigator.geolocation) {
     showMessage("This browser can't share its location.");
     return;
@@ -610,7 +625,7 @@ ui.units.addEventListener("click", (e) => {
   ui.panel.scrollTop = scroll;
 });
 
-/** Run the URL's query, opening match `open` (a reloaded comparison) or else the list. */
+/** Run the URL's query, opening match `open` (a reloaded comparison) or else the list; true if it has one. */
 function initFromUrl(open: number | null = null) {
   const u = new URLSearchParams(location.search);
   const num = (k: string) => (u.has(k) && u.get(k) !== "" && Number.isFinite(Number(u.get(k))) ? Number(u.get(k)) : null);
@@ -623,7 +638,9 @@ function initFromUrl(open: number | null = null) {
 
   const lat = num("lat");
   const lon = num("lon");
-  if (lat !== null && lon !== null) runQuery(lat, lon, { open }); // eases from the world view to the results
+  if (lat === null || lon === null) return false;
+  runQuery(lat, lon, { open }); // eases from the world view to the results
+  return true;
 }
 
 // The heatmap's colour stops, which also colour the results' ranks (null: they fall back to one colour).
@@ -636,4 +653,8 @@ const legendReady = fetch("/heatmap/legend")
   })
   .catch((err) => console.warn("No heatmap legend:", err.message));
 
-initFromUrl(history.state?.detail ?? null);
+// Over a shared link's results, the hint is a smaller aside that fades: its visitor still learns to click.
+const linked = initFromUrl(history.state?.detail ?? null);
+ui.mapHint.classList.toggle("linked", linked);
+ui.mapHint.hidden = false;
+if (linked) setTimeout(() => dismissHint(true), 10_000);
