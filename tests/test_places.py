@@ -238,17 +238,17 @@ class TestSearch:
         assert [p["name"] for p in places.search("zur")] == ["Zürich"]
 
     def test_by_population_with_whole_names_boosted(self, places: Places):
-        # Porto (250k) counts as 2.5M: above Porto Alegre (1.5M), which only starts with "porto".
-        # Bordeaux (265k) is "Porto" too in GeoNames, but an alternate name counts as 26k.
+        # Porto (250k) counts as 5M: above Porto Alegre (1.5M), which only starts with "porto".
+        # Bordeaux (265k) is "Porto" too in GeoNames: a whole alternate name counts as typed in part.
         assert [p["name"] for p in places.search("porto")] == ["Porto", "Porto Alegre", "Bordeaux"]
-        # While typing: Paris (2.1M) is above Par (9k, as 95k) and Pa (15k, as 150k); Par is above
+        # While typing: Paris (2.1M) is above Par (9k, as 190k) and Pa (15k, as 300k); Par is above
         # Paris, Texas (25k).
         assert [p["name"] for p in places.search("par")] == ["Paris", "Par", "Paris", "Parisot"]
         assert [p["name"] for p in places.search("pa")][0] == "Paris"
         assert [p["name"] for p in places.search("mexico")] == ["Mexico City", "Mexico"]  # an alternate name
-        # All names in part, by population: Bordeaux's "Porto" is an alternate name, so as 26k.
+        # All names in part, by population; alternate names match only whole, so not Bordeaux.
         assert [p["name"] for p in places.search("port")] == [
-            "Portcity", "Porto Alegre", "Portland", "Porto", "Portland", "Bordeaux", "Portland"]
+            "Portcity", "Porto Alegre", "Portland", "Porto", "Portland", "Portland"]
         assert places.search("s") == []  # too short
         assert [p["name"] for p in places.search("sa", limit=2)] == ["São Paulo", "Santiago"]
 
@@ -310,11 +310,10 @@ class TestSearch:
     def test_the_suggested_label_finds_its_place(self, places: Places):
         for i in range(len(places)):
             p = places.describe(i)
-            assert p in places.search(p["label"], limit=50), p["label"]
+            assert {**p, "matched": None} in places.search(p["label"], limit=50), p["label"]
 
     def test_alternate_names_of_big_cities(self, places: Places):
-        assert [p["name"] for p in places.search("NYC")] == ["New York City"]
-        assert [p["name"] for p in places.search("big app")] == ["New York City"]
+        assert [(p["name"], p["matched"]) for p in places.search("NYC")] == [("New York City", "NYC")]
         assert [p["name"] for p in places.search("New York, NY")] == ["New York City", "New York Mills"]
         assert [p["admin1"] for p in places.search("pdx")] == ["Oregon"]
         # A place's own name before another's alternate name, though that city is bigger. GeoNames
@@ -322,19 +321,13 @@ class TestSearch:
         assert [(p["name"], p["admin1"]) for p in places.search("bridgetown")] == [
             ("Bridgetown", "Saint Michael"), ("Portland", "Oregon")]
 
-    def test_alternate_names_going_on_past_a_whole_name(self, places: Places):
-        # "New York" is a whole name (New York City's), and Jakarta's nickname "New York Van Java"
-        # goes on from it with more words: another name altogether.
-        assert "Jakarta" not in [p["name"] for p in places.search("new york", limit=50)]
-        # Partway through a word of it, it's still being typed.
-        assert [p["name"] for p in places.search("new york v")] == ["Jakarta"]
-
-    def test_alternate_names_need_three_characters(self, places: Places):
-        # Chongqing (22M) is "Pa" in GeoNames: two letters are too early to match an alternate name.
+    def test_alternate_names_match_only_whole(self, places: Places):
+        # Their starts would suggest places whose names look unrelated (Jakarta is "New York Van Java").
+        assert [p["name"] for p in places.search("new york", limit=50)] == ["New York City", "New York Mills"]
+        assert places.search("big app") == [] and places.search("chu") == []
+        assert [p["name"] for p in places.search("chungking")] == ["Chongqing"]
+        # Only of 3+ characters: GeoNames has junk short ones (Chongqing is "Pa").
         assert "Chongqing" not in [p["name"] for p in places.search("pa", limit=50)]
-        assert [p["name"] for p in places.search("chu")] == ["Chongqing"]  # "Chungking"
-        assert places.search("ny") == []  # New York City's "NY"
-        assert [p["name"] for p in places.search("cdm")] == ["Mexico City"]
 
 
 class TestRegionAbbreviations:

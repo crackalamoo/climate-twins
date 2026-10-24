@@ -14,6 +14,7 @@ import bisect
 import difflib
 import logging
 import os
+import re
 import tempfile
 import unicodedata
 from collections import Counter
@@ -43,20 +44,19 @@ CITY_KM = 500.0
 CITY_DISTANCE_OFFSET_KM = 15.0
 CITY_DISTANCE_POWER = 3
 NEAR_KM = 25.0  # closer than this to the city, the label is "near <city>"
-# Search also finds cities that can label (CITY_MIN_POPULATION+) by all their GeoNames alternate
-# names: other languages, former names, abbreviations ("NYC"), airport codes ("PDX").
+# Search also finds cities that can label (CITY_MIN_POPULATION+) by their GeoNames alternate names:
+# other languages, former names, abbreviations ("NYC"), airport codes ("PDX"). Only by the whole
+# alternate name, so a suggestion is always for the name typed: a name still being typed is the start
+# of many other names that look unrelated ("San Francisco de Quito" for Quito, while typing "San Fran").
 SPELLING_SIMILARITY = 0.75  # an alternate name this close to the name is another spelling of it
+# Alternate names match only once the name typed is this long: GeoNames has junk short ones
+# (Chongqing as "Pa").
+ALIAS_MIN_CHARS = 3
 # Search ranks by population, but a place whose own name is the whole name typed ranks as if this many
 # times as populous: a subjective choice. Big enough that "Porto" puts Porto (250k) above Porto Alegre
-# (1.4M); small enough that while typing "Par", Paris (2.1M) is above Par, England (9k).
-WHOLE_NAME_BOOST = 10
-# A match by alternate name ranks as if this many times less populous: also subjective. GeoNames
-# gives cities other places' names (Bordeaux is also "Porto", Perth "Partha", which would beat Paris
-# at "Par"). Small enough that Mexico City (12M) by "Mexico" is above every place called Mexico.
-ALIAS_DISCOUNT = 10
-# Alternate names match only once the name typed is this long: two letters are too early to guess one,
-# and GeoNames has junk short ones (Chongqing as "Pa").
-ALIAS_MIN_CHARS = 3
+# (1.4M), and "Moab" Moab, Utah (5k) above Moabit, Berlin (81k); small enough that while typing "Par",
+# Paris (2.1M) is above Par, England (9k). A whole alternate name counts like a name typed in part.
+WHOLE_NAME_BOOST = 20
 # A place whose region or country the qualifier names whole (all of its name, or a code) ranks as if
 # this many times as populous as one it names only in part: also subjective. Big enough that
 # "Cambridge, MA" puts Cambridge, Massachusetts (110k) above Cambridge, Maryland (13k); small enough
@@ -68,8 +68,6 @@ WHOLE_QUALIFIER_BOOST = 10
 # names nothing whole): "Valencia, CA" is California or Canada, not Carabobo, which would win on
 # population. Lowercase "ca" could be either; one letter is too early to tell.
 CODE_LETTERS = (2, 3)
-# Weight of a match by alternate name, by a place's own name in part, and by its whole own name.
-_MATCH_WEIGHTS = np.array([1, ALIAS_DISCOUNT, ALIAS_DISCOUNT * WHOLE_NAME_BOOST], dtype=np.int64)
 # Naming boundary polygons (Places._polygon_areas): the towns inside one name its country, or
 # a region it has no usable code for, only if there are at least this many and every one agrees.
 POLYGON_MIN_TOWNS = 3
@@ -119,18 +117,29 @@ _UNDECOMPOSED = str.maketrans({"ı": "i", "ł": "l", "Ł": "l", "ø": "o", "Ø":
 
 def normalize(text: str) -> str:
     """Case- and accent-insensitive search key: casefold, NFKD, drop combining marks. Idempotent."""
+    if text.isascii():
+        return text.lower()
     decomposed = unicodedata.normalize("NFKD", text.casefold().translate(_UNDECOMPOSED))
     return "".join(c for c in decomposed if not unicodedata.combining(c))
 
 
+_SEPARATORS = re.compile(r"[-/,()]")
+_PUNCTUATION = re.compile(r"[^\w\s]|_")
+
+
 def _plain_words(text: str) -> list[str]:
     """normalize()d words of a name, punctuation dropped: "Arkhangel'sk" -> ["arkhangelsk"]."""
-    return "".join(c if c.isalnum() or c.isspace() else (" " if c in "-/,()" else "") for c in normalize(text)).split()
+    return _PUNCTUATION.sub("", _SEPARATORS.sub(" ", normalize(text))).split()
 
 
 def _name_words(text: str) -> list[str]:
     """_plain_words, with "St" as "Saint"."""
     return ["saint" if w == "st" else w for w in _plain_words(text)]
+
+
+def _key(text: str) -> str:
+    """A name as search matches it: "St. Louis" and "Saint-Louis" are both "saint louis"."""
+    return " ".join(_name_words(text))
 
 
 def region_repeats_city(region: str, name: str, *spellings: str, in_part: bool = True) -> bool:
@@ -181,14 +190,16 @@ def _prefixed(keys: list[str], prefix: str) -> slice:
 
 
 def _readings(text: str) -> Iterator[tuple[str, list[str]]]:
-    """Ways to read a normalize()d search as a name and then qualifier words, split at a space or
-    comma: "portland oregon" is the name "portland oregon", or "portland" then ["oregon"]."""
-    yield text.rstrip(" ,"), []
-    for i in range(1, len(text)):
-        if text[i - 1] in " ," and text[i] not in " ,":
-            name, words = text[:i].rstrip(" ,"), _plain_words(text[i:])
-            if len(name) >= 2 and words:
-                yield name, words
+    """Ways to read a search as a name (as a _key) and then qualifier words: "portland
+    oregon" is the name "portland oregon", or "portland" then ["oregon"]. A last word "st" is "Saint"
+    only once it's ended ("st " or "st."): until then it may be the start of "Stockholm"."""
+    words = _plain_words(text)
+    ended = not text[-1:].isalnum()
+    name = ["saint" if w == "st" and (k < len(words) - 1 or ended) else w for k, w in enumerate(words)]
+    for k in range(len(words), 0, -1):
+        key = " ".join(name[:k])
+        if k == len(words) or len(key) >= 2:
+            yield key, words[k:]
 
 
 class _Qualifiers:
@@ -401,6 +412,7 @@ class Places:
         self.population = cols["population"]
         self.labels = cols["labels"]  # usable as a label (not a section of another place)
         self.alt_names = _unpack(cols["alt_names"])  # "|"-separated; only for cities that can label
+        self.aliases = _unpack(cols["aliases"])  # likewise
         country_codes = _unpack(cols["country_codes"])
         country_index = {cc: j for j, cc in enumerate(country_codes)}
         self.country_index = np.array([country_index.get(cc, -1) for cc in self.country_code], dtype=np.int16)
@@ -416,14 +428,14 @@ class Places:
         self.tree = cKDTree(unit_vectors(self.lat, self.lon))
         self.polygon_areas = self._polygon_areas() if boundaries is not None else []
 
-        # One key per distinct normalized name or ASCII name of each place, and per other alternate
-        # name of a city that can label (`aliases`, flagged as such).
+        # One _key per distinct name or ASCII name of each place, and per other alternate name of a
+        # city that can label (`aliases`, flagged as such).
         keys: list[tuple[str, bool, int]] = []
-        for i, aliases in enumerate(_unpack(cols["aliases"])):
-            own = {normalize(self.name[i]), normalize(self.asciiname[i])}
+        for i, aliases in enumerate(self.aliases):
+            own = {_key(self.name[i]), _key(self.asciiname[i])}
             keys += [(k, False, i) for k in own]
             if aliases:
-                keys += [(k, True, i) for k in {normalize(a) for a in aliases.split("|")} - own]
+                keys += [(k, True, i) for k in {_key(a) for a in aliases.split("|")} - own - {""}]
         keys.sort()
         self._keys = [k for k, _, _ in keys]
         self._key_alias = np.fromiter((a for _, a, _ in keys), dtype=bool, count=len(keys))
@@ -675,34 +687,26 @@ class Places:
         }
 
     def search(self, q: str, limit: int = 8) -> list[dict]:
-        """Places whose name (or ASCII or alternate name) starts with q, or with q's first words when
-        the rest name the place's region and/or country (_Qualifiers): "Portland, Oregon", "Paris
-        France". Accent- and case-insensitive. Ranked by population, scaled by WHOLE_NAME_BOOST,
-        ALIAS_DISCOUNT and WHOLE_QUALIFIER_BOOST."""
-        text = normalize(q).strip()
-        if len(text.rstrip(" ,")) < 2 or limit <= 0:
+        """Places whose name or ASCII name starts with q, or whose alternate name is q, or the same
+        with q's first words when the rest name the place's region and/or country (_Qualifiers):
+        "Portland, Oregon", "Paris France". Accent- and case-insensitive. Ranked by population,
+        scaled by WHOLE_NAME_BOOST and WHOLE_QUALIFIER_BOOST."""
+        text = normalize(q)
+        if len(text.strip(" ,")) < 2 or limit <= 0:
             return []
         lo, hi = CODE_LETTERS
         codes = {normalize(w) for w in q.replace(",", " ").split() if lo <= len(w) <= hi and w.isalpha() and w.isupper()}
-        places, boosts, levels = [], [], []
+        matches, weights = [], []  # indices into _keys, and their places' weighted populations
         for name, qualifier in _readings(text):
             span = _prefixed(self._keys, name)
             keys = np.arange(span.start, span.stop)
-            if len(name) < ALIAS_MIN_CHARS:
-                keys = keys[~self._key_alias[keys]]
             whole = keys < bisect.bisect_right(self._keys, name, span.start, span.stop)
-            # Once the name typed is some place's whole name, an alternate name that goes on from it
-            # with more words is another name altogether: Jakarta's nickname "New York Van Java" isn't
-            # a New York. One it ends partway through a word of is still being typed: "Colo" (a town
-            # in Iowa) finds Köln by "Cologne".
-            if whole.any():
-                more_words = np.array([self._keys[k][len(name)] == " " for k in keys[~whole]], dtype=bool)
-                keep = whole | ~self._key_alias[keys]
-                keep[~whole] |= ~more_words
-                keys, whole = keys[keep], whole[keep]
-            level = np.where(self._key_alias[keys], 0, np.where(whole, 2, 1))  # into _MATCH_WEIGHTS
+            alias = self._key_alias[keys]
+            keep = ~alias | whole & (len(name) >= ALIAS_MIN_CHARS)
+            keys, whole, alias = keys[keep], whole[keep], alias[keep]
             place = self._key_place[keys]
-            boost = np.ones(keys.size, dtype=np.int64)  # WHOLE_QUALIFIER_BOOST where the qualifier names it whole
+            # An unknown population (0) counts as 1, so boosts still order such places.
+            weight = np.maximum(self.population[place], 1) * np.where(whole & ~alias, WHOLE_NAME_BOOST, 1)
             if qualifier and keys.size:
                 regions, countries = self.qualifiers.match(qualifier)
                 region, country = self.admin1_index[place], self.country_index[place]
@@ -716,25 +720,28 @@ class Places:
                 # all capitals, would find nothing).
                 if all(w in codes for w in qualifier) and (exact := named(True)).any():
                     keep = exact
-                boost = np.where(named(True)[keep], WHOLE_QUALIFIER_BOOST, 1)
-                level, place = level[keep], place[keep]
-            places.append(place)
-            boosts.append(boost)
-            levels.append(level)
-        place, level, boost = np.concatenate(places), np.concatenate(levels), np.concatenate(boosts)
-        # By weighted population, then (between equals, as with no population) the better kind of name
-        # match, then a whole qualifier, then population rank (stable: GeoNames file order).
-        weight = self.population[place] * _MATCH_WEIGHTS[level] * boost
-        order = np.lexsort((self._rank[place], -boost, -level, -weight))
-        place = place[order]
-        _, first = np.unique(place, return_index=True)  # each place at its best score
+                weight = weight * np.where(named(True), WHOLE_QUALIFIER_BOOST, 1)
+                keys, weight = keys[keep], weight[keep]
+            matches.append(keys)
+            weights.append(weight)
+        key, weight = np.concatenate(matches), np.concatenate(weights)
+        place = self._key_place[key]
+        # Ties by own name before alternate name, then population rank, then GeoNames file order.
+        order = np.lexsort((self._rank[place], self._key_alias[key], -weight))
+        _, first = np.unique(place[order], return_index=True)  # each place at its best score
         # Rows that read the same can't be told apart, so only the best-ranked of them is listed.
         # GeoNames has such pairs where one is an error (a town near Nam Dinh named "Hanoi, Hanoi")
         # and many that are villages of one name in one region; any of those is still a click away on the map.
         results: dict[str, dict] = {}
-        for i in place[np.sort(first)]:
-            p = self.describe(int(i))
-            results.setdefault(p["label"], p)
+        for k in key[order[np.sort(first)]]:
+            p = self.describe(int(self._key_place[k]))
+            results.setdefault(p["label"], {**p, "matched": self._alias_named(k)})
             if len(results) == limit:
                 break
         return list(results.values())
+
+    def _alias_named(self, k: int) -> str | None:
+        """The alternate name, as GeoNames writes it, that _keys[k] is the key of; None for a place's own name."""
+        if not self._key_alias[k]:
+            return None
+        return next(a for a in self.aliases[self._key_place[k]].split("|") if _key(a) == self._keys[k])

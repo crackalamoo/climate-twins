@@ -7,7 +7,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { ClimateMap, matchColors, renderLegend } from "./map.js";
 import { escapeHtml, renderComparison, statsHtml } from "./charts.js";
 import { fmtDistance, setUnits, units } from "./units.js";
-import type { Cell, Legend, LegendStop, Match, Place, Ruler, SearchPlace, SimilarResponse } from "./api.js";
+import type { Cell, Legend, LegendStop, Match, Place, Ruler, SearchResult, SimilarResponse } from "./api.js";
 
 const N_RESULTS = 20;
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -459,24 +459,28 @@ window.addEventListener("popstate", (e) => {
 
 let searchAbort: AbortController | null = null;
 let searchTimer: number | undefined;
-let suggestions: SearchPlace[] = [];
+let suggestions: SearchResult[] = [];
+let suggestionsFor: string | null = null; // the search text the shown suggestions are for
 let active = -1;
 
 function closeSuggestions() {
   ui.suggestions.hidden = true;
   ui.search.setAttribute("aria-expanded", "false");
   suggestions = [];
+  suggestionsFor = null;
   active = -1;
 }
 
-function showSuggestions(items: SearchPlace[]) {
+function showSuggestions(q: string, items: SearchResult[]) {
   suggestions = items;
+  suggestionsFor = q;
   active = items.length ? 0 : -1;
   ui.suggestions.innerHTML = "";
   items.forEach((p, i) => {
     const li = document.createElement("li");
     li.setAttribute("role", "option");
-    li.innerHTML = `${escapeHtml(p.label)}<span class="pop">${p.population ? p.population.toLocaleString("en-US") : ""}</span>`;
+    const matched = p.matched ? `<span class="matched">${escapeHtml(p.matched)}</span>` : "";
+    li.innerHTML = `${escapeHtml(p.label)}${matched}<span class="pop">${p.population ? p.population.toLocaleString("en-US") : ""}</span>`;
     // mousedown (not click) so it fires before the input's blur closes the list
     li.addEventListener("mousedown", (e) => {
       e.preventDefault();
@@ -504,14 +508,17 @@ function choose(i: number) {
   runQuery(p.lat, p.lon);
 }
 
-async function fetchSuggestions(q: string) {
+/** Show the suggestions for q, and with `pick` (Enter pressed before they came) choose the first. */
+async function fetchSuggestions(q: string, pick = false) {
   searchAbort?.abort();
   const abort = (searchAbort = new AbortController());
   try {
     const res = await fetch(`/places/search?${new URLSearchParams({ q, limit: "8" })}`, { signal: abort.signal });
     if (!res.ok) throw new Error(res.statusText);
-    const items: SearchPlace[] = await res.json();
-    if (!abort.signal.aborted && ui.search.value.trim() === q) showSuggestions(items);
+    const items: SearchResult[] = await res.json();
+    if (abort.signal.aborted || ui.search.value.trim() !== q) return;
+    showSuggestions(q, items);
+    if (pick) choose(0);
   } catch (err) {
     if ((err as Error).name !== "AbortError") showMessage(`Place search failed: ${(err as Error).message}`);
   }
@@ -529,6 +536,16 @@ ui.search.addEventListener("input", () => {
 });
 
 ui.search.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const q = ui.search.value.trim();
+    if (q === suggestionsFor) choose(active);
+    else if (q.length >= 2) {
+      clearTimeout(searchTimer);
+      fetchSuggestions(q, true);
+    }
+    return;
+  }
   if (ui.suggestions.hidden) return;
   if (e.key === "ArrowDown" || e.key === "ArrowUp") {
     e.preventDefault();
@@ -536,9 +553,6 @@ ui.search.addEventListener("keydown", (e) => {
     active = (active + (e.key === "ArrowDown" ? 1 : -1) + suggestions.length) % suggestions.length;
     highlightActive();
     ui.suggestions.children[active].scrollIntoView({ block: "nearest" });
-  } else if (e.key === "Enter") {
-    e.preventDefault();
-    choose(active);
   } else if (e.key === "Escape") {
     closeSuggestions();
   }

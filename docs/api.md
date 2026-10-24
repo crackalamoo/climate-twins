@@ -54,14 +54,16 @@ Monthly normals and summary for the nearest land cell, plus `place` for the requ
 
 ## `GET /places/search?q&limit=8`
 
-Autocomplete. `q` (2+ characters) is the start of a place's name, ASCII name or (for cities of
-100k+, once 3+ characters are typed) a GeoNames alternate name, optionally followed by its region
-and/or country, as a name or code: `"Portland, Oregon"`, `"portland or"`, `"Vancouver BC"`,
-`"Paris France"`. Case- and accent-insensitive. Ranked by population, weighted by how well the
-name and qualifier match (`Places.search` in `places.py` has the rules). `limit` is 1–50.
+Autocomplete. `q` (2+ characters) is the start of a place's name or ASCII name, or (for cities of
+100k+) the whole of a GeoNames alternate name of 3+ characters (`"NYC"`, `"Roma"`), optionally
+followed by its region and/or country, as a name or code: `"Portland, Oregon"`, `"portland or"`,
+`"Vancouver BC"`, `"Paris France"`. Case- and accent-insensitive; "St" is "Saint". Ranked by
+population, weighted by how well the name and qualifier match (`Places.search` in `places.py` has the
+rules). `limit` is 1–50.
 
-Returns `[{name, admin1, country, country_code, population, lat, lon, base_label, label}]`, where
-`label` (equal to `base_label`) is `"Porto Alegre, Rio Grande do Sul, Brazil"` style.
+Returns `[{name, admin1, country, country_code, population, lat, lon, base_label, label, matched}]`,
+where `label` (equal to `base_label`) is `"Porto Alegre, Rio Grande do Sul, Brazil"` style, and
+`matched` is the alternate name the place was found by (`"Roma"` for Rome), or null.
 
 ## `GET /tiles/{z}/{x}/{y}.png?lat&lon&align=auto&exclude_km=1500`
 

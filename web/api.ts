@@ -33,11 +33,16 @@ interface PlaceFields {
   label: string;
 }
 
-/** A /places/search result. */
+/** A place with a population and coordinates: a /places/search result, or a label naming a city. */
 export interface SearchPlace extends PlaceFields {
   population: number;
   lat: number;
   lon: number;
+}
+
+/** A /places/search result: `matched` is the alternate name it was found by ("Roma" for Rome), if any. */
+export interface SearchResult extends SearchPlace {
+  matched: string | null;
 }
 
 interface LabelFields extends PlaceFields {

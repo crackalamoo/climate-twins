@@ -146,6 +146,7 @@ button {
 }
 #suggestions li { padding: 6px 9px; cursor: pointer; }
 #suggestions li .pop { color: var(--muted); font-size: 12px; margin-left: 4px; }
+#suggestions li .matched { color: var(--muted); font-style: italic; margin-left: 4px; }
 #suggestions li[aria-selected="true"] { background: var(--hover); }
 @media (hover: hover) { #suggestions li:hover { background: var(--hover); } }
 
