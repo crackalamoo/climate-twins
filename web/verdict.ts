@@ -19,6 +19,9 @@ import type { Match, Monthly, QueryPoint } from "./api.js";
 const NEGLIGIBLE_D2 = 0.02;
 const CLEAR_D2 = 0.15;
 const MUCH_D2 = 0.4;
+// A whole difference as big as every factor differing by MUCH_D2: no real twin, which only the
+// emptiest extremes (ice sheets, the Puna, interior Siberia) get.
+const FAR_D2 = 5 * MUCH_D2;
 const SIZE_WORDS: [number, string][] = [
   [MUCH_D2, "much"],
   [CLEAR_D2, ""],
@@ -280,7 +283,8 @@ const sizeWord = (d2: number) => SIZE_WORDS.find(([min]) => d2 >= min)?.[1] ?? "
  * sized on the search's own scale, but the factors that differ by season share one ("Cooler, drier
  * summers; milder, wetter winters."). A clear difference with no simple pattern, bigger than any
  * named, is named too: "Rainfall differs through the year." A near-twin, judged on the whole
- * difference, is "Very similar." and its largest difference.
+ * difference, is "Very similar." and its largest difference; a match with nothing close is "Very
+ * different." first.
  * Null without `monthly` on both and the match's `difference_d2`.
  */
 export function verdict(query: QueryPoint, match: Match): string | null {
@@ -343,6 +347,7 @@ export function verdict(query: QueryPoint, match: Match): string | null {
   // A near-twin: say so, and give only its largest difference.
   const near = total < CLEAR_D2;
   if (near) shown = shown.slice(0, 1);
+  const far = total >= FAR_D2;
   const said = new Map(shown.map((f) => [f, f.phrase!(sizeWord(f.clear))]));
   // The seasonal words, in the factors' order, said where the largest of them would be.
   const seasonal = factors.flatMap((f) => { const x = said.get(f); return Array.isArray(x) ? x : []; });
@@ -353,7 +358,7 @@ export function verdict(query: QueryPoint, match: Match): string | null {
     return f === first ? [bySeason(seasonal, s!)] : [];
   });
   const sentences = [
-    ...(near ? ["very similar"] : temperature.d2 < NEGLIGIBLE_D2 ? ["nearly identical temperatures"] : []),
+    ...(near ? ["very similar"] : far ? ["very different"] : temperature.d2 < NEGLIGIBLE_D2 ? ["nearly identical temperatures"] : []),
     ...phrases,
     ...(unpatterned.length ? [`${andList(unpatterned.map((f) => f.words.noun))} ${unpatterned.length > 1 ? "differ" : "differs"} through the year`] : []),
   ];
