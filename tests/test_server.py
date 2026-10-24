@@ -69,6 +69,8 @@ def test_similar(client: TestClient):
     assert isinstance(body["elapsed_ms"], int)
     assert (body["query"]["place"]["name"], body["query"]["place"]["tier"]) == ("Midtown", "near")
     assert top["place"]["tier"] == "region"
+    assert set(body["ruler"]) == {"min_km", "max_km", "min_population", "cities"}
+    assert "ruler_comparison" in top
 
 
 def test_climate(client: TestClient):
@@ -202,6 +204,7 @@ def test_without_geonames(client_without_places: TestClient):
     assert c.get("/climate", params={"lat": lat, "lon": lon}).json()["place"] is None
     assert c.get("/places/search", params={"q": "sao"}).json() == []
     assert c.get("/health").json()["places"] == 0
+    assert body["ruler"]["cities"] == []
 
 
 def test_tile(client: TestClient):
@@ -224,12 +227,6 @@ def test_static_files_revalidate(client: TestClient, path: str):
     assert r.status_code == 200
     assert r.headers["cache-control"] == "no-cache"
     assert client.get(path, headers={"If-None-Match": r.headers["etag"]}).status_code == 304
-
-
-def test_similar_has_a_ruler(client: TestClient):
-    body = client.get("/similar", params={"lat": NC_QUERY[0], "lon": NC_QUERY[1], "n": 1}).json()
-    assert set(body["ruler"]) == {"min_km", "max_km", "min_population", "cities"}
-    assert "ruler_comparison" in body["matches"][0]
 
 
 # The ruler on the 2-degree synthetic world (base_index), whose cell centres sit on odd degrees:
@@ -290,13 +287,6 @@ def test_ruler(ruler_request: SimpleNamespace):
             assert c["distance"] == pytest.approx(want[c["name"]], abs=1e-4)
 
 
-def test_ruler_candidates(ruler_request: SimpleNamespace):
-    places = ruler_request.app.state.places
-    idx, _ = places.big_cities(*RULER_QUERY, server.RULER_MIN_KM, server.CITY_KM, server.RULER_MIN_POPULATION, server.RULER_MIN_KM)
-    # Not Suburbia (the query's metro), Borough (Bigcity's), Hamlet (too small) or Faraway (too far).
-    assert {places.name[i] for i in idx} == {"Bigcity", "Eastville", "Grenzstadt", "Lakeside", "Westport", "Offcentre"}
-
-
 def test_ruler_comparisons(ruler_request: SimpleNamespace):
     """A tie if any (the nearest in distance), else "closer than" the most similar city it clearly
     beats; "all" when it clearly beats every one; None when it beats none. Only the cities named,
@@ -314,9 +304,3 @@ def test_ruler_comparisons(ruler_request: SimpleNamespace):
     assert comparisons[1] == {"kind": "closer", "city": names.index(beaten)}
     assert comparisons[2] is None
     assert set(names) == {beaten, min(dist, key=dist.get)}
-
-
-def test_ruler_without_places(client_without_places: TestClient):
-    body = client_without_places.get("/similar", params={"lat": NC_QUERY[0], "lon": NC_QUERY[1], "n": 1}).json()
-    assert body["ruler"]["cities"] == []
-

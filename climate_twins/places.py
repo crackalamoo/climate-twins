@@ -447,8 +447,6 @@ class Places:
     def __len__(self) -> int:
         return len(self.lat)
 
-    # -- labels --------------------------------------------------------------
-
     def _within(self, lat: float, lon: float, km: float) -> tuple[np.ndarray, np.ndarray]:
         """Label-eligible places within km of (lat, lon), and their distances."""
         idx = np.asarray(self.tree.query_ball_point(unit_vectors(lat, lon), _chord(km)), dtype=np.int64)
@@ -675,8 +673,6 @@ class Places:
             "base_label": ", ".join(parts),  # "Name, Admin1, Country"
             "label": ", ".join(parts),
         }
-
-    # -- search --------------------------------------------------------------
 
     def search(self, q: str, limit: int = 8) -> list[dict]:
         """Places whose name (or ASCII or alternate name) starts with q, or with q's first words when

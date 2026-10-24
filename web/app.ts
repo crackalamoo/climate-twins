@@ -43,7 +43,7 @@ const resultRows = () => ui.results.children as HTMLCollectionOf<HTMLLIElement>;
 const resultRow = (rank: number | null) => [...resultRows()].find((li) => Number(li.dataset.rank) === rank);
 
 let current: SimilarResponse | null = null; // last successful /similar response
-let queryPoint: { lat: number; lon: number } | null = null; // {lat, lon} of the last requested query
+let queryPoint: { lat: number; lon: number } | null = null; // the last requested query
 let shownSearch: string | null = null; // the URL's query string for `current`
 let selectedRank: number | null = null;
 let listScroll = 0; // the panel's scroll position in the list, restored on coming back to it
@@ -55,8 +55,6 @@ const map = new ClimateMap("map", {
   onMarkerHover: (rank) => hover(rank),
   overlays: [ui.legend],
 });
-
-// ---------------------------------------------------------------- formatting
 
 function fmtCoord(lat: number, lon: number) {
   const ns = lat >= 0 ? "N" : "S";
@@ -164,8 +162,6 @@ function fmtSliderKm(km: string) {
   return fmtDistance(Number(km), { step: units() === "us" ? 10 : 1 });
 }
 
-// ---------------------------------------------------------------- messages
-
 function showMessage(text: string, kind = "error") {
   ui.message.textContent = text;
   ui.message.className = `message ${kind === "info" ? "info" : ""}`;
@@ -175,8 +171,6 @@ function showMessage(text: string, kind = "error") {
 function clearMessage() {
   ui.message.hidden = true;
 }
-
-// ---------------------------------------------------------------- query
 
 function params() {
   return {
@@ -264,8 +258,6 @@ async function runQuery(lat: number, lon: number, { fit = "always", open = null 
   await pinned;
   if (!abort.signal.aborted) map.fitResults({ ifHidden: fit === "ifHidden" });
 }
-
-// ---------------------------------------------------------------- rendering
 
 /**
  * Show a /similar response in the panel and on the map, leaving the view and selection to the
@@ -465,8 +457,6 @@ window.addEventListener("popstate", (e) => {
   else showList();
 });
 
-// ---------------------------------------------------------------- search box
-
 let searchAbort: AbortController | null = null;
 let searchTimer: number | undefined;
 let suggestions: SearchPlace[] = [];
@@ -556,8 +546,6 @@ ui.search.addEventListener("keydown", (e) => {
 
 ui.search.addEventListener("blur", closeSuggestions);
 
-// ---------------------------------------------------------------- my location
-
 ui.locate.addEventListener("click", () => {
   if (!navigator.geolocation) {
     showMessage("This browser can't share its location.");
@@ -573,8 +561,6 @@ ui.locate.addEventListener("click", () => {
     { timeout: 15000 },
   );
 });
-
-// ---------------------------------------------------------------- controls
 
 ui.adjust.addEventListener("click", () => {
   ui.adjust.setAttribute("aria-expanded", String(ui.adjust.getAttribute("aria-expanded") !== "true"));
@@ -609,8 +595,6 @@ ui.units.addEventListener("click", (e) => {
   else openDetail(selectedRank!, null);
   ui.panel.scrollTop = scroll;
 });
-
-// ---------------------------------------------------------------- startup
 
 /** Run the URL's query, opening match `open` (a reloaded comparison) or else the list. */
 function initFromUrl(open: number | null = null) {

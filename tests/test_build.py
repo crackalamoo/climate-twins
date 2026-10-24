@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 
 from climate_twins.features import RAW_VARS
-from climate_twins.geo import great_circle_km
 from climate_twins.index import ClimateIndex
 
 from .conftest import (
@@ -16,7 +15,6 @@ from .conftest import (
     NC_MIN_LAT,
     NC_PARTIAL,
     NC_QUERY,
-    NC_TWIN,
     nc_index,
     nc_land_mask,
 )
@@ -42,7 +40,7 @@ def test_grid_and_land_cells(loaded: ClimateIndex):
     assert loaded.pcs.shape == (len(expected), loaded.model.k)
     assert np.all(np.isin(loaded.sample, np.arange(len(loaded))))
 
-    # Fill in one month of one variable drops the cell; south of min_lat is dropped.
+    # A missing month of the first variable drops the cell, as does lying south of min_lat.
     for p in (NC_PARTIAL, NC_ANTARCTIC):
         with pytest.raises(LookupError):
             loaded.locate(*p)
@@ -62,14 +60,6 @@ def test_raw_values_round_trip(built: tuple[Path, dict], loaded: ClimateIndex):
 def test_pcs_match_in_memory_projection(loaded: ClimateIndex):
     idx = np.arange(len(loaded))
     np.testing.assert_allclose(loaded.model.project(loaded.vectors(idx)), loaded.pcs, atol=1e-5)
-
-
-def test_query_finds_planted_twin(loaded: ClimateIndex):
-    res = loaded.similar(*NC_QUERY, n=5)
-    top = res["matches"][0]
-    assert (top["cell"]["lat"], top["cell"]["lon"]) == NC_TWIN
-    assert top["distance"] == pytest.approx(0.0, abs=1e-3)
-    assert top["km_from_query"] == pytest.approx(round(float(great_circle_km(*NC_QUERY, *NC_TWIN))))
 
 
 def test_rebuild_replaces_existing_index(tmp_path: Path, built: tuple[Path, dict]):

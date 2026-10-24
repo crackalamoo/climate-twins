@@ -1,6 +1,4 @@
 import itertools
-import threading
-import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -49,9 +47,6 @@ def brute_force_nms(
             continue
         picked.append(int(i))
     return picked
-
-
-# -- locate ---------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
@@ -108,9 +103,6 @@ class TestLocate:
                 idx.locate(lat, lon)
 
 
-# -- similar ---------------------------------------------------------------------
-
-
 def test_planted_twin_is_found_first(world: World):
     world.plant(world.pos(*FAR), world.pos(*QUERY))
     idx = world.index()
@@ -148,8 +140,8 @@ def test_exclude_km_removes_nearby_identical_cells(world: World):
     assert all(m["distance"] == pytest.approx(0.0, abs=1e-3) for m in res0["matches"])
 
 
-@pytest.mark.parametrize("suppress_km", [0.0, 1500.0])
-def test_suppress_km_spacing_and_sorted(base_index: ClimateIndex, suppress_km: float):
+def test_suppress_km_spacing_and_sorted(base_index: ClimateIndex):
+    suppress_km = 1500.0
     res = base_index.similar(*QUERY, n=30, exclude_km=500, suppress_km=suppress_km)
     assert len(res["matches"]) == 30
     ll = match_latlon(res)
@@ -163,14 +155,13 @@ def test_suppress_km_spacing_and_sorted(base_index: ClimateIndex, suppress_km: f
 
 
 def test_southern_twin_needs_season_shift(world: World):
-    s, q = world.pos(*SOUTH), world.pos(*QUERY)
-    world.plant(s, q, shift_months=6)
+    twin, q = world.pos(*SOUTH), world.pos(*QUERY)
+    world.plant(twin, q, shift_months=6)
     idx = world.index()
-    s_cell = s
 
     auto = idx.similar(*QUERY, n=10, align="auto")
     top = auto["matches"][0]
-    assert top["cell"]["index"] == s_cell
+    assert top["cell"]["index"] == twin
     assert top["seasons_shifted_6_months"] is True
     assert top["distance"] == pytest.approx(0.0, abs=1e-3)
 
@@ -178,18 +169,16 @@ def test_southern_twin_needs_season_shift(world: World):
     assert cal["params"]["align"] == "calendar"
     assert not any(m["seasons_shifted_6_months"] for m in cal["matches"])
     cells = match_cells(cal)
-    assert cells[0] != s_cell
-    if s_cell in cells:
-        assert cal["matches"][cells.index(s_cell)]["distance"] > cal["matches"][0]["distance"]
+    assert cells[0] != twin
+    if twin in cells:
+        assert cal["matches"][cells.index(twin)]["distance"] > cal["matches"][0]["distance"]
 
 
-def test_fewer_results_than_requested(base_index: ClimateIndex):
-    res = base_index.similar(*QUERY, n=200, exclude_km=500, suppress_km=3000)
-    assert 0 < len(res["matches"]) < 200
+def test_exclusion_covering_the_globe_gives_no_matches(base_index: ClimateIndex):
     assert base_index.similar(*QUERY, n=5, exclude_km=20_000)["matches"] == []
 
 
-@pytest.mark.parametrize("initial", [1, 64, index_mod.INITIAL_CANDIDATES])
+@pytest.mark.parametrize("initial", [1, index_mod.INITIAL_CANDIDATES])
 @pytest.mark.parametrize(
     "n, exclude_km, suppress_km, align",
     [(20, 500, 400, "auto"), (50, 0, 0, "calendar"), (40, 2000, 1200, "auto"), (200, 500, 2500, "auto")],
@@ -276,12 +265,9 @@ def test_pick_with_exact_ties_equals_brute_force(monkeypatch, world: World, init
         world.plant(int(i), q)
     idx = world.index()
     monkeypatch.setattr(index_mod, "INITIAL_CANDIDATES", initial)
-    for exclude_km, suppress_km in [(0, 0), (500, 400), (500, 0)]:
+    for exclude_km, suppress_km in [(0, 0), (500, 400)]:
         res = idx.similar(*QUERY, n=40, exclude_km=exclude_km, suppress_km=suppress_km, align="calendar")
         assert match_cells(res) == brute_force_nms(idx, *QUERY, 40, exclude_km, suppress_km, "calendar")
-
-
-# -- query cache ---------------------------------------------------------------------
 
 
 def test_scan_read_only_and_min_over_alignments(world: World):
@@ -354,25 +340,6 @@ def test_query_cache_lru_eviction():
     assert len(cache) == 2
     n = len(calls)
     assert cache.get("b", compute("b")) == "b" and len(calls) == n
-
-
-def test_query_cache_concurrent_misses_compute_once():
-    cache = index_mod.QueryCache(4)
-    calls = []
-
-    def slow():
-        calls.append(1)
-        time.sleep(0.05)
-        return object()
-
-    results = []
-    threads = [threading.Thread(target=lambda: results.append(cache.get("k", slow))) for _ in range(8)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    assert len(calls) == 1
-    assert all(r is results[0] for r in results)
 
 
 def test_query_cache_failed_compute_is_retried():

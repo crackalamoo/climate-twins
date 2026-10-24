@@ -198,7 +198,6 @@ button {
 }
 .message.info { background: #eef4fb; color: #1c4f8f; }
 
-/* headline */
 .intro h1 { margin: 0; font: 400 28px/1.1 var(--serif); letter-spacing: -0.005em; }
 .intro p { margin: 6px 0 0; font: 14px/1.4 var(--serif); color: var(--muted); }
 
@@ -327,7 +326,6 @@ button {
 .pager .name { font: 400 15px/1.3 var(--serif); }
 .pager .rank { margin-right: 2px; color: var(--rank-color, var(--text)); }
 
-/* the comparison */
 #compare { padding-top: 16px; }
 #compare h3:focus { outline: none; } /* focused for screen readers on opening, not as a control */
 /* the rank hangs in its own column, as in the list, so "2" and "64 mi" don't run together */

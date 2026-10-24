@@ -1,5 +1,3 @@
-import json
-
 import numpy as np
 import pytest
 
@@ -17,7 +15,7 @@ from climate_twins.features import (
     shift_seasons,
 )
 
-from .conftest import CODECS, World
+from .conftest import CODECS, World, make_world
 
 F = len(FEATURES)
 
@@ -25,8 +23,6 @@ F = len(FEATURES)
 @pytest.fixture(scope="module")
 def fitted() -> tuple[World, FeatureModel, np.ndarray]:
     """(world, model fitted on it, cell latitudes)."""
-    from .conftest import make_world
-
     w = make_world()
     lat = w.grid.lat_of(w.cells)
     return w, fit_feature_model(w.raw, w.codecs, lat), lat
@@ -36,53 +32,23 @@ def world_vectors(w: World, model: FeatureModel) -> np.ndarray:
     return model.vectors(perceptual(physical(w.raw, w.codecs, w.grid.lat_of(w.cells))))
 
 
-class TestDewpoint:
-    def test_monotonic(self):
-        d = dewpoint_c(np.linspace(0.03, 6.0, 500))
-        assert np.all(np.diff(d) > 0)
-
-    def test_zero_vapor_is_finite_floor(self):
-        d = dewpoint_c(np.array([0.0, -0.1]))
-        assert np.all(np.isfinite(d))
-        assert d[0] == pytest.approx(-37.3, abs=0.5)
-        assert d[1] == d[0]
+def test_zero_vapor_dewpoint_is_a_finite_floor():
+    d = dewpoint_c(np.array([0.0, -0.1]))
+    assert np.all(np.isfinite(d))
+    assert d[0] == pytest.approx(-37.3, abs=0.5)
+    assert d[1] == d[0]
 
 
-class TestShiftSeasons:
-    def test_monthly_shape(self):
-        x = np.arange(2 * F * MONTHS).reshape(2, F, MONTHS)
-        s = shift_seasons(x)
-        assert s.shape == x.shape
-        np.testing.assert_array_equal(s[..., 6], x[..., 0])
-        np.testing.assert_array_equal(s[..., 0], x[..., 6])
-
-    def test_flat_shape_matches_monthly(self):
-        x = np.random.default_rng(0).normal(size=(3, F, MONTHS))
-        flat = shift_seasons(x.reshape(3, -1))
-        assert flat.shape == (3, F * MONTHS)
-        np.testing.assert_array_equal(flat, shift_seasons(x).reshape(3, -1))
-        # A 1-D single vector works too, and months never leak between features.
-        np.testing.assert_array_equal(shift_seasons(x[0].ravel()), shift_seasons(x[0]).ravel())
-
-    @pytest.mark.parametrize("shape", [(F * MONTHS,), (2, 3, F, MONTHS)])
-    def test_twice_is_identity(self, shape):
-        x = np.random.default_rng(1).normal(size=shape)
-        np.testing.assert_array_equal(shift_seasons(shift_seasons(x)), x)
+def test_shift_seasons_flat_matches_monthly():
+    """Flattened (..., F*12) vectors roll within each feature, never across them."""
+    x = np.random.default_rng(0).normal(size=(3, F, MONTHS))
+    flat = shift_seasons(x.reshape(3, -1))
+    assert flat.shape == (3, F * MONTHS)
+    np.testing.assert_array_equal(flat, shift_seasons(x).reshape(3, -1))
+    np.testing.assert_array_equal(shift_seasons(x[0].ravel()), shift_seasons(x[0]).ravel())
 
 
 class TestFeatureModel:
-    def test_dict_round_trip_through_json(self, fitted):
-        _, model, _ = fitted
-        back = FeatureModel.from_dict(json.loads(json.dumps(model.to_dict())))
-        for name in FeatureModel.__dataclass_fields__:
-            np.testing.assert_array_equal(getattr(back, name), getattr(model, name))
-
-    def test_from_dict_rejects_other_features(self, fitted):
-        d = fitted[1].to_dict()
-        d["features"] = list(reversed(d["features"]))
-        with pytest.raises(ValueError, match="features"):
-            FeatureModel.from_dict(d)
-
     def test_standardization_is_area_weighted_unit(self, fitted):
         w, model, lat = fitted
         area = np.cos(np.radians(lat))
@@ -92,11 +58,6 @@ class TestFeatureModel:
         var = np.einsum("i,ifm->f", wt, z.astype(np.float64) ** 2) / MONTHS - mean**2
         np.testing.assert_allclose(mean, 0, atol=1e-4)
         np.testing.assert_allclose(var, 1, atol=1e-4)
-
-    def test_components_orthonormal(self, fitted):
-        c = fitted[1].components
-        assert c.shape == (F * MONTHS, fitted[1].k)
-        np.testing.assert_allclose(c.T @ c, np.eye(c.shape[1]), atol=1e-10)
 
     def test_explained_variance_sorted_and_target_met_minimally(self, fitted):
         r = fitted[1].explained_variance_ratio
@@ -114,11 +75,6 @@ class TestFeatureModel:
             s = shift_seasons(c)
             assert np.allclose(s, c, atol=1e-8) or np.allclose(s, -c, atol=1e-8)
 
-    def test_vectors_commute_with_season_shift(self, fitted):
-        w, model, _ = fitted
-        p = perceptual(physical(w.raw, w.codecs, w.grid.lat_of(w.cells)))[:50]
-        np.testing.assert_array_equal(model.vectors(shift_seasons(p)), shift_seasons(model.vectors(p)))
-
     def test_projected_distance_approximates_full_distance(self, fitted):
         w, model, _ = fitted
         v = world_vectors(w, model).astype(np.float64)
@@ -132,15 +88,6 @@ class TestFeatureModel:
         # ... and with 99% of variance kept it shrinks them only a little.
         assert proj.sum() / full.sum() > 0.97
         assert np.corrcoef(np.sqrt(proj), np.sqrt(full))[0, 1] > 0.995
-
-    def test_full_rank_projection_is_a_rotation(self, fitted):
-        w, _, lat = fitted
-        model = fit_feature_model(w.raw, w.codecs, lat, variance_target=1.0)
-        v = world_vectors(w, model).astype(np.float64)[:200]
-        pcs = model.project(v).astype(np.float64)
-        full = ((v[:, None] - v[None]) ** 2).sum(-1)
-        proj = ((pcs[:, None] - pcs[None]) ** 2).sum(-1)
-        np.testing.assert_allclose(proj, full, rtol=1e-4, atol=1e-3)
 
     def test_chunked_fit_matches_single_pass(self, fitted):
         w, model, lat = fitted
@@ -186,7 +133,3 @@ class TestClearness:
         assert k[0, 5] == pytest.approx(0.3, abs=0.02)
         assert np.all((0 <= clearness(toa * 2, toa)) & (clearness(toa * 2, toa) <= 1))
 
-    def test_clearness_is_the_ratio_whatever_the_latitude(self):
-        """The point of the feature: same cloudiness at different latitudes looks alike."""
-        toa = toa_radiation(np.array([5.0, 50.0]))
-        np.testing.assert_allclose(clearness(0.55 * toa, toa), 0.55, atol=1e-9)

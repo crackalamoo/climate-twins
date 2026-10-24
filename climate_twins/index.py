@@ -191,8 +191,6 @@ class ClimateIndex:
     def lon_of(self, idx) -> np.ndarray:
         return self.grid.lon_of(self.cells[idx])
 
-    # -- per-cell data -------------------------------------------------------
-
     def physical(self, idx: np.ndarray) -> dict[str, np.ndarray]:
         idx = np.atleast_1d(idx)
         return physical({v: self.raw[v][idx] for v in RAW_VARS}, self.codecs, self.lat_of(idx))
@@ -232,8 +230,6 @@ class ClimateIndex:
             "summary": climate_summary(p),
             "monthly": climate_monthly(p),
         }
-
-    # -- search --------------------------------------------------------------
 
     def similar(
         self,

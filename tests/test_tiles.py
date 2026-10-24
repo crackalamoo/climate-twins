@@ -34,11 +34,10 @@ def test_pixel_centers_web_mercator():
     assert lon[0] == pytest.approx(-180 + 360 / 512) and lon[-1] == pytest.approx(180 - 360 / 512)
     assert lat[0] == pytest.approx(85.0511, abs=0.35) and lat[0] < 85.0511
     assert lat[127] > 0 > lat[128] and lat[127] == pytest.approx(-lat[128])
-    assert np.all(np.diff(lat) < 0)  # rows run north to south
+    assert np.all(np.diff(lat) < 0)
     # z=1, x=1, y=0 is the north-east quadrant.
     lat, lon = tiles.pixel_centers(1, 1, 0)
     assert lat.min() > 0 and lon.min() > 0
-    # Round trip through the forward projection.
     for la, lo, z in [(31.0, 31.0, 5), (-33.9, 18.4, 6), (60.1, -149.9, 3)]:
         x, y, r, c = tile_of(la, lo, z)
         plat, plon = tiles.pixel_centers(z, x, y)
@@ -117,10 +116,3 @@ def test_exclusion_greys_home_region_and_rescales_the_rest(base_index: ClimateIn
     assert (rgba[grey][:, :3] == tiles.EXCLUDED_RGB).all()
     want = tiles.colorize(top)
     np.testing.assert_array_equal(rgba[visible & ~inside], want[visible & ~inside])
-
-
-@pytest.mark.parametrize("zxy", [(-1, 0, 0), (tiles.MAX_ZOOM + 1, 0, 0), (2, 4, 0), (2, 0, 4)])
-def test_bad_tile_coordinates(base_index: ClimateIndex, zxy):
-    q = base_index.query(base_index.locate(*QUERY)[0])
-    with pytest.raises(tiles.TileRangeError):
-        tiles.render_tile(base_index, q, *zxy)

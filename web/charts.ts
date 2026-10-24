@@ -241,7 +241,6 @@ function seriesNames(labels: Labels): Names {
 
 /**
  * Render the comparison into `el`.
- * query: the /similar `query` object (with monthly); match: one of its `matches` (with monthly).
  * labels: query, the query's full place label; {queryName, matchName} short names (may be null);
  * verdictName: what the verdict is "Compared to" (the query's name, or "your spot"); and matchLines:
  * the match's label as [primary, secondary-or-null], for the two-line heading.

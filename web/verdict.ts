@@ -39,12 +39,12 @@ const MIN_LAG_MONTHS = 0.5;
 // The query has a summer and winter when its warmest and coldest months differ by this much (°C,
 // daily mean); else its seasons, if any, are wet and dry.
 const SEASONAL_RANGE_C = 6;
-// Winters are milder or colder when the colder of the two averages below this (°C, daily mean); both
-// warmer, they're just warmer or cooler.
-const COLD_WINTER_C = 15;
 // ...and wet and dry seasons when its wettest 3 months get this many times its driest 3's rain (each
 // plus the precipitation feature's 15 mm, so a desert's 2 mm vs 0 mm isn't a wet season).
 const WET_DRY_RATIO = 2;
+// Winters are milder or colder when the colder of the two averages below this (°C, daily mean); both
+// warmer, they're just warmer or cooler.
+const COLD_WINTER_C = 15;
 // The smaller part of a two-part pattern ("warmer summers, colder winters") is named only when it's
 // at least this fraction of the larger.
 const PART_FRACTION = 0.4;
@@ -206,12 +206,10 @@ function bySeason(words: SeasonWord[], s: Seasons): string {
 }
 
 /**
- * How a factor's monthly diffs differ, as {explained, phrase, sized}: the pattern explaining most of
- * them; its share (0-1) of their sum of squares, which is its share of the factor's part of the
- * climate difference, as the patterns are orthogonal parts of the diffs; and whether the phrase takes
- * a size word. f.series is [d] or, for temperature, [dHighs, dLows]; f.timing is when its season
- * comes, for temperature and rain.
- * the match's temperature peaks.
+ * How a factor's monthly diffs differ, as {explained, phrase}: the pattern explaining most of them,
+ * and its share (0-1) of their sum of squares, which is its share of the factor's part of the climate
+ * difference, as the patterns are orthogonal parts of the diffs. f.series is [d] or, for temperature,
+ * [dHighs, dLows]; f.timing is when its season comes, for temperature and rain.
  */
 function pattern(f: Factor, s: Seasons | null): Pattern {
   const { series, words, timing } = f;
