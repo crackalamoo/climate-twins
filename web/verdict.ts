@@ -88,6 +88,7 @@ interface Words {
   noun: string;
   seasonal?: [string, string, string, string]; // up and down words in summer, then in winter
   summerOnly?: boolean;
+  contrast?: string; // its seasons are its own: going opposite ways in them is "more/less <contrast>"
 }
 
 interface Part {
@@ -143,7 +144,7 @@ const lagMonths = (match: number[], query: number[]) => ((((peakMonth(harmonic(m
 const logPpt = (mm: number) => Math.log(Math.max(mm, 0) + 15); // the feature's own log(mm + 15)
 
 /**
- * The query's wet and dry seasons, when its wettest 3 months get WET_DRY_RATIO times its driest 3's
+ * The query's rainy and dry seasons, when its wettest 3 months get WET_DRY_RATIO times its driest 3's
  * rain: the direction of its rain's annual cycle (a unit [a, b]) and the seasons' months.
  */
 function wetSeasons(q: Monthly): { cycle: number[]; hi: number[]; lo: number[] } | null {
@@ -166,14 +167,15 @@ function seasons(q: Monthly): Seasons | null {
     return { cycle: unit(harmonic(tmean)), hi: monthsBy(tmean, true), lo: monthsBy(tmean, false), names: ["summer", "winter"], temperate: true };
   }
   const wet = wetSeasons(q);
-  return wet && { ...wet, names: ["the wet season", "the dry season"], temperate: false };
+  return wet && { ...wet, names: ["the rainy season", "the dry season"], temperate: false };
 }
 
 /**
  * A pattern of two parts (summer then winter, days then nights, in that order) as a phrase.
  * Opposite ways: both, when the smaller is at least PART_FRACTION of the larger ("drier summers,
- * much wetter winters"). The same way: the overall word, and which part most ("warmer, especially
- * at night"). parts: [{v, up, down, when}].
+ * much wetter winters"), or for seasons that are the factor's own, their contrast ("less distinct rainy
+ * and dry seasons", not "drier in the rainy season and wetter in the dry season"). The same way: the
+ * overall word, and which part most ("warmer, especially at night"). parts: [{v, up, down, when}].
  */
 function twoParts(parts: Part[], words: Words, size: string): Said {
   const larger = Math.abs(parts[1].v) > Math.abs(parts[0].v) ? 1 : 0;
@@ -188,6 +190,7 @@ function twoParts(parts: Part[], words: Words, size: string): Said {
   };
   if (Math.abs(b.v) < PART_FRACTION * Math.abs(a.v)) return said([a], () => size);
   if (Math.sign(a.v) !== Math.sign(b.v)) {
+    if (words.contrast) return sized(size, `${parts[0].v > 0 ? "more" : "less"} ${words.contrast}`);
     // "much" belongs to the larger part only; "slightly" covers both (a bare part would read larger).
     return said(parts, (p) => (size !== "much" || p === a ? size : ""));
   }
@@ -332,7 +335,7 @@ export function verdict(query: QueryPoint, match: Match): string | null {
       d2: d2.ppt,
       series: [diff("ppt", logPpt)],
       timing: wet ? { cycle: wet.cycle, lag: lagMonths(aligned(m, "ppt").map(logPpt), q.ppt.map(logPpt)), season: "the rainy season" } : undefined,
-      words: { up: "wetter", down: "drier", noun: "rainfall" },
+      words: { up: "wetter", down: "drier", noun: "rainfall", contrast: s && !s.temperate ? "distinct rainy and dry seasons" : undefined },
     },
     { d2: d2.dewpoint, series: [diff("dewpoint")], words: { up: "more humid", down: "less humid", noun: "humidity", summerOnly: true } },
     { d2: d2.clearness, series: [diff("clearness")], words: { up: "sunnier", down: "cloudier", noun: "sunshine" } },
