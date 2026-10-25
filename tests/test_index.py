@@ -283,6 +283,7 @@ def test_scan_read_only_and_min_over_alignments(world: World):
     assert np.all(d2 <= idx.scan(idx.query(qi, "calendar")) + 1e-4)  # auto takes the min over alignments
     np.testing.assert_array_equal(q.reference(), np.sort(idx.d2_at(q, idx.sample)))
     np.testing.assert_allclose(q.sample_d2, d2[idx.sample], rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(q.sample_full_d2, idx.distance_at(q, idx.sample) ** 2, rtol=1e-4, atol=1e-5)
 
 
 def test_only_the_latest_scan_is_kept(world: World):
@@ -312,8 +313,10 @@ def test_similar_percentile_uses_exclusion(world: World):
         res = idx.similar(*QUERY, n=3, exclude_km=ex)
         q = idx.query(world.pos(*QUERY))
         for m in res["matches"]:
-            want = 100.0 - float(q.top_pct(idx.scan(q)[m["cell"]["index"]], ex))
+            want = 100.0 - float(q.top_pct(idx.distance_at(q, [m["cell"]["index"]])[0] ** 2, ex, full=True))
             assert m["more_similar_than_pct_of_land"] == pytest.approx(want, abs=1e-3)
+        pct = [m["more_similar_than_pct_of_land"] for m in res["matches"]]
+        assert pct == sorted(pct, reverse=True)  # ranked by the same distance
 
 
 def test_similar_identical_with_and_without_cache(world: World):

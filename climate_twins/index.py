@@ -6,6 +6,7 @@ import threading
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from typing import Literal
 
@@ -28,12 +29,12 @@ PICK_CHUNK = 1024
 # picker can need a far larger band of cells when most near the query are excluded (~4x the time).
 RESORT_FACTOR = 1.5
 MONTHLY_VARS = ("tmax", "tmin", "dewpoint", "ppt", "srad", "clearness", "ws")
-# Per query, tiles need only its projected vectors and its percentile reference (a sample of
-# land), ~2 MB: enough are kept for everyone browsing at once. /similar needs the distance to
-# every land cell (a float32 each, ~36 MB): only the latest is kept, for slider tweaks.
+# Per query, tiles need only its projected vectors and its percentile references (distances to a
+# sample of land), ~3 MB: enough are kept for everyone browsing at once. /similar needs the distance
+# to every land cell (a float32 each, ~36 MB): only the latest is kept, for slider tweaks.
 QUERY_CACHE_SIZE = 16
 SCAN_CACHE_SIZE = 1
-MAX_REFERENCES = 8  # per cached query: one per exclusion radius used
+MAX_REFERENCES = 8  # per cached query: one per exclusion radius used (and projected or full)
 
 
 def _d2(qp: np.ndarray, qq: np.ndarray, pcs: np.ndarray, norms: np.ndarray) -> np.ndarray:
@@ -78,30 +79,33 @@ class Query:
     qp: np.ndarray  # (v, k) their PCA projections
     qq: np.ndarray  # (v,) their squared norms
     sample_d2: np.ndarray  # d2 of each cell in the area-weighted sample, for percentiles
+    sample_full_d2: np.ndarray  # the same, unprojected: for matches, ranked by full distance
     sample_km: np.ndarray  # km from the query cell to each sample cell
     _refs: dict = field(default_factory=dict, repr=False, compare=False)
 
-    def reference(self, exclude_km: float = 0.0) -> np.ndarray:
-        """Sorted sample d2 over land at least exclude_km from the query cell.
+    def reference(self, exclude_km: float = 0.0, full: bool = False) -> np.ndarray:
+        """Sorted sample d2 (projected, or full) over land at least exclude_km from the query cell.
 
         Percentiles are relative to this land only, so a large climate region around
         the query (which the search excludes) doesn't use up the top of the scale.
         Falls back to all land if the exclusion would leave none.
         """
-        key = max(float(exclude_km), 0.0)
-        ref = self._refs.get(key)
+        km = max(float(exclude_km), 0.0)
+        ref = self._refs.get((km, full))
         if ref is None:
-            keep = self.sample_d2[self.sample_km >= key] if key > 0 else self.sample_d2
-            ref = np.sort(keep if keep.size else self.sample_d2)
+            d2 = self.sample_full_d2 if full else self.sample_d2
+            keep = d2[self.sample_km >= km] if km > 0 else d2
+            ref = np.sort(keep if keep.size else d2)
             ref.flags.writeable = False
             if len(self._refs) >= MAX_REFERENCES:
                 self._refs.clear()
-            self._refs[key] = ref  # a racing duplicate computes the same array: harmless
+            self._refs[(km, full)] = ref  # a racing duplicate computes the same array: harmless
         return ref
 
-    def top_pct(self, d2: np.ndarray | float, exclude_km: float = 0.0) -> np.ndarray:
-        """Share (%) of land beyond exclude_km at least as similar as d2: 0 = most similar."""
-        ref = self.reference(exclude_km)
+    def top_pct(self, d2: np.ndarray | float, exclude_km: float = 0.0, full: bool = False) -> np.ndarray:
+        """Share (%) of land beyond exclude_km at least as similar as d2 (projected, or full):
+        0 = most similar."""
+        ref = self.reference(exclude_km, full)
         return 100.0 * np.searchsorted(ref, d2, side="right") / len(ref)
 
 
@@ -269,7 +273,10 @@ class ClimateIndex:
                     "cell": self._cell_json(i),
                     "km_from_query": round(float(great_circle_km(lat, lon, self.lat_of(i), self.lon_of(i))), 0),
                     "distance": round(float(np.sqrt(per_variant.min())), 4),  # = distance_at
-                    "more_similar_than_pct_of_land": round(100.0 - float(q.top_pct(d2[i], exclude_km)), 3),
+                    # By full distance, like the ranking, so a better rank never reads as less similar.
+                    "more_similar_than_pct_of_land": round(
+                        100.0 - float(q.top_pct(per_variant.min(), exclude_km, full=True)), 3
+                    ),
                     "seasons_shifted_6_months": shifted,
                     **self._difference(q.variants[int(shifted)], i),
                     **self._climate_json(i, detail),
@@ -298,11 +305,18 @@ class ClimateIndex:
         qp = self.model.project(variants)
         qq = np.array([float(v @ v) for v in qp])
         sample_d2 = _d2(qp, qq, self.pcs[self.sample], self.norms[self.sample])
+        sample_full_d2 = _d2(variants, np.einsum("ij,ij->i", variants, variants), *self._sample_vectors)
         sample_lat, sample_lon = self.lat_of(self.sample), self.lon_of(self.sample)
         sample_km = great_circle_km(self.lat_of(qi), self.lon_of(qi), sample_lat, sample_lon).astype(np.float32)
-        for a in (variants, qp, qq, sample_d2, sample_km):
+        for a in (variants, qp, qq, sample_d2, sample_full_d2, sample_km):
             a.flags.writeable = False
-        return Query(qi, align, variants, qp, qq, sample_d2, sample_km)
+        return Query(qi, align, variants, qp, qq, sample_d2, sample_full_d2, sample_km)
+
+    @cached_property
+    def _sample_vectors(self) -> tuple[np.ndarray, np.ndarray]:
+        """The sample's full vectors and their squared norms (~60 MB), for full-distance percentiles."""
+        v = self.vectors(self.sample)
+        return v, np.einsum("ij,ij->i", v, v)
 
     def _full_d2(self, q: Query, pos) -> np.ndarray:
         """(len(pos), v) full (unprojected) squared distances from the cells at pos to each of q's

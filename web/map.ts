@@ -240,6 +240,7 @@ export class ClimateMap {
   constructor(container: string, { onClick, onMarkerClick, onMarkerHover, overlays = [] }: Options) {
     this.map = new Map({ container, style: STYLE, center: [0, 20], zoom: 1.3, attributionControl: { compact: true } });
     this.map.addControl(new NavigationControl({ showCompass: false }), "top-left");
+    this.map.scrollZoom.setZoomRate(2 / 100); // trackpad: twice MapLibre's default, which crawls across a world map
     this.map.getCanvas().style.cursor = "crosshair";
     this.map.on("click", (e) => this.handleClick(e, onClick));
     this.map.on("mousemove", (e) => this.handleHover(e));
