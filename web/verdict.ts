@@ -55,10 +55,17 @@ const COLD_WINTER_C = 15;
 // at least this fraction of the larger.
 const PART_FRACTION = 0.4;
 
-// What a factor's pattern says: a phrase, or how it differs by season, to merge with the other
+// What a factor's pattern says: a phrase; a plain shift, to merge with the others of its size and
+// qualifier ("much sunnier and wetter"); or how it differs by season, to merge with the other
 // factors' ("cooler, drier summers and milder, wetter winters").
-type Said = string | SeasonWord[];
+type Said = string | Shift | SeasonWord[];
 type Phrase = (size: string) => Said;
+
+interface Shift {
+  size: string;
+  word: string;
+  when?: string; // the part that differs most: "warmer, especially at night"
+}
 
 interface SeasonWord {
   season: 0 | 1; // the query's high season, or its low one
@@ -184,7 +191,7 @@ function twoParts(parts: Part[], words: Words, size: string): Said {
     // "much" belongs to the larger part only; "slightly" covers both (a bare part would read larger).
     return said(parts, (p) => (size !== "much" || p === a ? size : ""));
   }
-  return `${sized(size, a.v > 0 ? words.up : words.down)}, especially ${a.when}`;
+  return { size, word: a.v > 0 ? words.up : words.down, when: a.when };
 }
 
 /**
@@ -230,7 +237,7 @@ function pattern(f: Factor, s: Seasons | null): Pattern {
   const isTemp = words.key === "temperature";
   // The seasonal and day/night phrases use the actual means (summer's, the highs'), so they also say
   // any overall shift: they explain it as well as their own pattern.
-  const candidates: { ss: number; phrase: Phrase; richer?: boolean }[] = [{ ss: shift, phrase: (size) => sized(size, m > 0 ? words.up : words.down) }];
+  const candidates: { ss: number; phrase: Phrase; richer?: boolean }[] = [{ ss: shift, phrase: (size) => ({ size, word: m > 0 ? words.up : words.down }) }];
   if (s && (s.temperate || !isTemp)) { // a tropical place's temperature has no seasons to speak of
     const [a, b] = harmonic(d);
     const [ua, ub] = s.cycle;
@@ -281,17 +288,20 @@ function pattern(f: Factor, s: Seasons | null): Pattern {
   return { explained: best.ss / total, phrase: best.phrase };
 }
 
-const andList = (xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}` : xs[0]);
+const andList = (xs: string[]) => (xs.length > 2 ? `${xs.slice(0, -1).join(", ")}, and ${xs.at(-1)}` : xs.join(" and "));
 const sizeWord = (d2: number) => SIZE_WORDS.find(([min]) => d2 >= min)?.[1] ?? "slightly";
+const isShift = (x: Said): x is Shift => typeof x === "object" && !Array.isArray(x);
+/** Shifts of one size and qualifier as one phrase: "slightly sunnier and more humid, especially in summer". */
+const shifts = (xs: Shift[]) => `${sized(xs[0].size, andList(xs.map((x) => x.word)))}${xs[0].when ? `, especially ${xs[0].when}` : ""}`;
 
 /**
  * A terse verdict on how the match's climate differs from the query's, e.g. "Nearly identical
  * temperatures. Slightly sunnier." One sentence per factor with a clear pattern, the largest first,
  * sized on the search's own scale, but the factors that differ by season share one ("Cooler, drier
- * summers; milder, wetter winters."). A clear difference with no simple pattern, bigger than any
- * named, is named too: "Rainfall follows a different yearly pattern." A near-twin, judged on the whole
- * difference, is "Very similar." and its largest difference; a match with nothing close is "Very
- * different." first.
+ * summers; milder, wetter winters."), as do plain shifts of one size and qualifier ("Much sunnier and
+ * wetter."). A clear difference with no simple pattern, bigger than any named, is named too: "Rainfall
+ * follows a different yearly pattern." A near-twin, judged on the whole difference, is "Very similar."
+ * and its largest difference; a match with nothing close is "Very different." first.
  * Null without `monthly` on both and the match's `difference_d2`.
  */
 export function verdict(query: QueryPoint, match: Match): string | null {
@@ -361,7 +371,12 @@ export function verdict(query: QueryPoint, match: Match): string | null {
   const first = shown.find((f) => Array.isArray(said.get(f)));
   const phrases = shown.flatMap((f) => {
     const x = said.get(f)!;
-    if (!Array.isArray(x)) return [x];
+    if (typeof x === "string") return [x];
+    if (isShift(x)) {
+      // Said where the largest of its size and qualifier would be.
+      const like = [...said.values()].filter((y) => isShift(y) && y.size === x.size && y.when === x.when) as Shift[];
+      return like[0] === x ? [shifts(like)] : [];
+    }
     return f === first ? [bySeason(seasonal, s!)] : [];
   });
   const sentences = [

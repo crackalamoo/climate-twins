@@ -1,4 +1,5 @@
 import itertools
+import math
 from types import SimpleNamespace
 
 import numpy as np
@@ -28,7 +29,8 @@ def match_latlon(result: dict) -> np.ndarray:
 def brute_force_nms(
     idx: ClimateIndex, lat: float, lon: float, n: int, exclude_km: float, suppress_km: float, align: str
 ) -> list[int]:
-    """Reference: float64 distances to every cell, then greedy suppression over all of them."""
+    """Reference: float64 projected distances to every cell, greedy suppression over all of them
+    for RESORT_FACTOR * n picks, then the n closest by full distance."""
     qi, _ = idx.locate(lat, lon)
     qvec = idx.vectors(qi)[0]
     variants = [qvec, shift_seasons(qvec)] if align == "auto" else [qvec]
@@ -39,14 +41,18 @@ def brute_force_nms(
     lats, lons = idx.lat_of(every), idx.lon_of(every)
     picked: list[int] = []
     for i in np.argsort(d2, kind="stable"):
-        if len(picked) == n:
+        if len(picked) == math.ceil(index_mod.RESORT_FACTOR * n):
             break
         if great_circle_km(lat, lon, lats[i], lons[i]) < exclude_km:
             continue
         if any(great_circle_km(lats[i], lons[i], lats[j], lons[j]) < suppress_km for j in picked):
             continue
         picked.append(int(i))
-    return picked
+    if not picked:
+        return []
+    vectors = idx.vectors(np.array(picked)).astype(np.float64)
+    full = np.min([((vectors - v) ** 2).sum(axis=1) for v in variants], axis=0)
+    return sorted(picked, key=lambda i: (full[picked.index(i)], i))[:n]
 
 
 @pytest.fixture(scope="module")
@@ -150,8 +156,6 @@ def test_suppress_km_spacing_and_sorted(base_index: ClimateIndex):
     d = [m["distance"] for m in res["matches"]]
     assert d == sorted(d)
     assert [m["rank"] for m in res["matches"]] == list(range(1, 31))
-    pct = [m["more_similar_than_pct_of_land"] for m in res["matches"]]
-    assert pct == sorted(pct, reverse=True)
 
 
 def test_southern_twin_needs_season_shift(world: World):
@@ -216,8 +220,7 @@ def test_difference_d2_is_the_unprojected_squared_distance(world: World):
         total = sum(d2.values())
         for f in FEATURES:
             assert m["difference_share"][f] == pytest.approx(d2[f] / total, abs=2e-3)
-        # The projected distance leaves out the PCA's truncated part: never more than the full one.
-        assert m["distance"] ** 2 <= full * (1 + 1e-3) + 1e-6
+        assert m["distance"] ** 2 == pytest.approx(full, rel=1e-3, abs=1e-6)
 
 
 def test_distance_at_is_the_reported_distance(base_index: ClimateIndex):
@@ -232,9 +235,9 @@ def test_distances_to_snaps_points_like_queries(fine_index: ClimateIndex, monkey
     """Points in a land cell take it, a point just offshore snaps to the coast, one far at sea is NaN;
     each distance is the best of the query's alignments, as matches' are."""
     rng = np.random.default_rng(0)
-    pcs = rng.normal(size=fine_index.pcs.shape).astype(np.float32)
-    idx = ClimateIndex(fine_index.grid, fine_index.codecs, fine_index.model, fine_index.cells, fine_index.raw, pcs, fine_index.sample)
-    q = SimpleNamespace(qp=rng.normal(size=(2, idx.model.k)).astype(np.float32))  # two alignments
+    idx = fine_index
+    vectors = idx.vectors(np.arange(len(idx))).astype(np.float64)
+    q = SimpleNamespace(variants=rng.normal(size=(2, vectors.shape[1])).astype(np.float32))  # two alignments
     monkeypatch.setattr(idx, "query", lambda qi, align="auto": q)
     lats = idx.lat_of(np.arange(len(idx)))
     north, north_lon = float(lats.max()), float(idx.lon_of(np.argmax(lats)))
@@ -244,7 +247,7 @@ def test_distances_to_snaps_points_like_queries(fine_index: ClimateIndex, monkey
     assert np.isnan(got[2])
     for p, d in zip(points[:2], got[:2]):
         i, _ = idx.locate(*p)
-        assert d == pytest.approx(np.sqrt(((pcs[i].astype(np.float64) - q.qp) ** 2).sum(axis=1).min()))
+        assert d == pytest.approx(np.sqrt(((vectors[i] - q.variants) ** 2).sum(axis=1).min()))
 
 
 def test_describe_decodes_raw(base_index: ClimateIndex):

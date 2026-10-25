@@ -65,9 +65,10 @@ curl 'localhost:8000/similar?lat=37.77&lon=-122.42&n=5'
    rebuild after changing them.
 3. **PCA** (fit on the data plus a 6-month season-shifted copy, no whitening) keeps
    enough components for 99% of the variance.
-4. **Search**: brute force over all cells, taking the better of the normal and the
-   6-month-shifted seasons, then keep the best cells at least `suppress_km` apart and
-   beyond `exclude_km` of the query.
+4. **Search**: brute force over all cells in PCA space (which also draws the heatmap),
+   taking the better of the normal and the 6-month-shifted seasons, then pick 1.5 times as
+   many cells as asked for, at least `suppress_km` apart and beyond `exclude_km` of the
+   query, and keep the closest by full, unprojected distance.
 
 ## Limitations
 

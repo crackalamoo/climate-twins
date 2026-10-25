@@ -20,12 +20,13 @@ A query is `(lat, lon, align)`; the server snaps `lat/lon` to the nearest land c
 Returns `query` (the requested point, its `cell` and `snapped_km`, `summary`, `place`, and with
 `detail` its months), `params`, `matches`, `ruler` and `elapsed_ms`. Each match has:
 - `rank`, `cell` (lat/lon of the cell centre), `km_from_query`.
-- `distance`: lower is more similar, in weighted, standardized feature units.
-- `more_similar_than_pct_of_land`: area-weighted share of land beyond `exclude_km` that is less similar.
+- `distance`: lower is more similar, in weighted, standardized feature units. Matches are ranked by it.
+- `more_similar_than_pct_of_land`: area-weighted share of land beyond `exclude_km` that is less similar,
+  on the heatmap's scale (the PCA projection), so it needn't fall in rank order.
 - `seasons_shifted_6_months`.
 - `difference_share`: each feature's share of the squared difference.
 - `difference_d2`: each feature's part of the squared difference, in `distance`'s units squared
-  (unprojected, so they sum to more than `distance`²).
+  (they sum to `distance`²).
 - `summary`: annual and extreme values.
 - `place`: a [Place label](#place-label) for the cell centre, or `null`.
 - `ruler_comparison`: how it compares with `ruler.cities` (below), or `null`.

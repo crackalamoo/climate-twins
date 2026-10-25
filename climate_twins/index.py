@@ -22,6 +22,11 @@ MAX_SNAP_KM = 25.0
 DEFAULT_EXCLUDE_KM = 1500.0
 INITIAL_CANDIDATES = 4096
 PICK_CHUNK = 1024
+# Matches are picked by the scan's projected distance, this many times as many as asked for, and
+# the closest by full distance are kept: the ranking, `distance` and the verdicts then agree. More
+# gains nothing measurable (the spacing has already suppressed the rest), and past ~1.5x the
+# picker can need a far larger band of cells when most near the query are excluded (~4x the time).
+RESORT_FACTOR = 1.5
 MONTHLY_VARS = ("tmax", "tmin", "dewpoint", "ppt", "srad", "clearness", "ws")
 # Per query, tiles need only its projected vectors and its percentile reference (a sample of
 # land), ~2 MB: enough are kept for everyone browsing at once. /similar needs the distance to
@@ -249,14 +254,15 @@ class ClimateIndex:
         """
         qi, snap_km = self.locate(lat, lon)
         q = self.query(qi, align)
-        qp, d2 = q.qp, self.scan(q)
-        picked = self._pick(d2, lat, lon, n, exclude_km, suppress_km)
+        d2 = self.scan(q)
+        picked = np.array(self._pick(d2, lat, lon, math.ceil(RESORT_FACTOR * n), exclude_km, suppress_km), dtype=np.int64)
+        full = self._full_d2(q, picked)
+        keep = np.lexsort((picked, full.min(axis=1)))[:n]  # any subset of the picks is still spaced
 
         q_phys = {k: v[0] for k, v in self.physical(qi).items()}
         matches = []
-        for rank, i in enumerate(picked, 1):
-            per_variant = self._exact_d2(q, [i])[0]
-            shifted = bool(len(qp) > 1 and per_variant[1] < per_variant[0])
+        for rank, (i, per_variant) in enumerate(zip(picked[keep].tolist(), full[keep]), 1):
+            shifted = bool(len(per_variant) > 1 and per_variant[1] < per_variant[0])
             matches.append(
                 {
                     "rank": rank,
@@ -298,15 +304,17 @@ class ClimateIndex:
             a.flags.writeable = False
         return Query(qi, align, variants, qp, qq, sample_d2, sample_km)
 
-    def _exact_d2(self, q: Query, pos) -> np.ndarray:
-        """(len(pos), v) squared distances from the cells at pos to each of q's alignments, in
-        float64. d2_at uses the fast |x|^2 - 2x.q + |q|^2 expansion in float32, which is off by
-        ~1e-5 and so reports ~0.003 for an identical climate: fine for ranking, not for display."""
-        return ((self.pcs[pos].astype(np.float64)[:, None, :] - q.qp) ** 2).sum(axis=2)
+    def _full_d2(self, q: Query, pos) -> np.ndarray:
+        """(len(pos), v) full (unprojected) squared distances from the cells at pos to each of q's
+        alignments, in float64. The scan's projected d2 leaves out the PCA's truncated part."""
+        pos = np.asarray(pos, dtype=np.int64)
+        if not len(pos):
+            return np.empty((0, len(q.variants)))
+        return ((self.vectors(pos).astype(np.float64)[:, None, :] - q.variants) ** 2).sum(axis=2)
 
     def distance_at(self, q: Query, pos) -> np.ndarray:
-        """The `distance` /similar reports for each cell at pos: exact, the best of q's alignments."""
-        return np.sqrt(self._exact_d2(q, pos).min(axis=1))
+        """The `distance` /similar reports for each cell at pos: full, the best of q's alignments."""
+        return np.sqrt(self._full_d2(q, pos).min(axis=1))
 
     def distances_to(self, lat: float, lon: float, align: Align, lats, lons) -> np.ndarray:
         """Climate distance from the query (lat, lon, align) to each point (lats, lons), on the same
@@ -396,8 +404,7 @@ class ClimateIndex:
         """Each feature's part of the (full, unprojected) squared distance: as a share, and as is.
 
         As is (difference_d2) is in the weighted, standardized units the search measures in, so the
-        UI can size a gap ("slightly sunnier") on the search's own scale. distance**2 isn't that
-        total: the PCA truncation drops much of a close match's small difference (20-85% is kept).
+        UI can size a gap ("slightly sunnier") on the search's own scale; they sum to distance**2.
         """
         diff = (self.vectors(i)[0] - qvec).reshape(len(FEATURES), -1)
         per = (diff.astype(np.float64) ** 2).sum(axis=1)
