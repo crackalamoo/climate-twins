@@ -55,13 +55,13 @@ curl 'localhost:8000/similar?lat=37.77&lon=-122.42&n=5'
 
 ## Method
 
-1. **Features**: 12 monthly values each of daily high and low temperature, dewpoint
-   (from vapor pressure), `log(mm + 15)` precipitation, sky clearness (surface solar
+1. **Features**: 12 monthly values each of daily high and low temperature, humidity
+   (vapor pressure), `log(mm + 15)` precipitation, sky clearness (surface solar
    radiation ÷ top-of-atmosphere radiation, so sunny vs grey without the latitude
    effect) and wind speed: 72 numbers per cell.
 2. **Standardize** each feature over all land (area-weighted), then **weight** them
-   so that, among close matches, highs and lows count most, then humidity and rain,
-   then sun and wind. Weights are `WEIGHTS` in `climate_twins/features.py`;
+   so that, among close matches, highs and lows count most, then rain, then sun and
+   humidity, then wind. Weights are `WEIGHTS` in `climate_twins/features.py`;
    rebuild after changing them.
 3. **PCA** (fit on the data plus a 6-month season-shifted copy, no whitening) keeps
    enough components for 99% of the variance.
@@ -72,7 +72,8 @@ curl 'localhost:8000/similar?lat=37.77&lon=-122.42&n=5'
 
 ## Limitations
 
-- Dewpoint is coarse (TerraClimate stores vapor pressure in 0.1 kPa steps).
+- Humidity is coarse: TerraClimate stores vapor pressure in 0.1 kPa steps, about the smallest
+  gap the verdicts mention.
 - Cells are ~4 km averages with no elevation correction; a city in a steep valley can
   differ from its cell.
 - Normals only: nothing about variability, extremes or storms.

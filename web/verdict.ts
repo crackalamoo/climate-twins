@@ -8,11 +8,11 @@ import type { Match, Monthly, QueryPoint } from "./api.js";
 // standardized units the search ranks by), so a word never outsizes what the search counts.
 // Thresholds picked from the top 20 matches of 21 varied places; for scale, the same gap in every
 // month costs about:
-//            temperature (highs and lows)  dewpoint  precipitation  clearness  wind
-//   0.02     0.5 °C                        1.4 °C    21%            0.027      0.6 m/s
-//   0.05     0.8 °C                        2.1 °C    36%            0.042      0.9 m/s
-//   0.15     1.3 °C                        3.7 °C    70%            0.073      1.5 m/s
-//   0.4      2.2 °C                        6 °C      2.4×           0.12       2.5 m/s
+//            temperature (highs and lows)  humidity (dewpoint near 20 / 0 °C)  precipitation  clearness  wind
+//   0.02     0.5 °C                        0.9 hPa (0.6 / 2.0 °C)               18%            0.026      0.5 m/s
+//   0.05     0.8 °C                        1.4 hPa (1.0 / 3.2 °C)               31%            0.041      0.8 m/s
+//   0.15     1.3 °C                        2.5 hPa (1.7 / 5.5 °C)               59%            0.071      1.4 m/s
+//   0.4      2.2 °C                        4.0 hPa (2.8 / 9 °C)                 2.1×           0.12       2.3 m/s
 // Below NEGLIGIBLE_D2 a gap isn't mentioned (temperature is then "nearly identical"). Three sizes, as
 // readers can't tell more apart ("slightly" from "a bit"), and a bare "wetter" must read as more
 // than "slightly wetter".
@@ -142,6 +142,8 @@ const unit = (h: number[]) => h.map((x) => x / (Math.hypot(...h) || 1));
 /** How many months later (-6..6) a match's annual cycle peaks than the query's. */
 const lagMonths = (match: number[], query: number[]) => ((((peakMonth(harmonic(match)) - peakMonth(harmonic(query))) % 12) + 18) % 12) - 6;
 const logPpt = (mm: number) => Math.log(Math.max(mm, 0) + 15); // the feature's own log(mm + 15)
+// The humidity feature's own vapor pressure (hPa), from dewpoint by the Magnus formula the server inverts.
+const vaporPressure = (dewpoint: number) => 6.112 * Math.exp((17.625 * dewpoint) / (243.04 + dewpoint));
 
 /**
  * The query's rainy and dry seasons, when its wettest 3 months get WET_DRY_RATIO times its driest 3's
@@ -337,7 +339,7 @@ export function verdict(query: QueryPoint, match: Match): string | null {
       timing: wet ? { cycle: wet.cycle, lag: lagMonths(aligned(m, "ppt").map(logPpt), q.ppt.map(logPpt)), season: "the rainy season" } : undefined,
       words: { up: "wetter", down: "drier", noun: "rainfall", contrast: s && !s.temperate ? "distinct rainy and dry seasons" : undefined },
     },
-    { d2: d2.dewpoint, series: [diff("dewpoint")], words: { up: "more humid", down: "less humid", noun: "humidity", summerOnly: true } },
+    { d2: d2.dewpoint, series: [diff("dewpoint", vaporPressure)], words: { up: "more humid", down: "less humid", noun: "humidity", summerOnly: true } },
     { d2: d2.clearness, series: [diff("clearness")], words: { up: "sunnier", down: "cloudier", noun: "sunshine" } },
     { d2: d2.ws, series: [diff("ws")], words: { up: "windier", down: "less windy", noun: "wind" }, wind: true },
   ] as ScoredFactor[];

@@ -2,7 +2,7 @@
 
 Pipeline for one cell (12 months of each raw variable):
   1. physical units   -- decode the stored integers (scale/offset from the netCDF files)
-  2. perceptual units -- vapor pressure -> dewpoint, precipitation -> log(mm + PPT_OFFSET_MM),
+  2. perceptual units -- humidity as vapor pressure (hPa), precipitation -> log(mm + PPT_OFFSET_MM),
                          solar radiation -> sky clearness (fraction of top-of-atmosphere sunlight)
   3. standardize      -- per feature, pooled over months, area-weighted over all land
   4. weight           -- how much each feature should matter (WEIGHTS)
@@ -29,16 +29,18 @@ SEASON_SHIFT = 6
 # matches, which also depends on how much it varies between otherwise similar places.
 # The weights were tuned (iteratively, on the top 20 matches of 100 random land
 # locations at default settings) so those shares are about:
-#   daily highs 24%, nightly lows 18%, humidity 15%, rain 20%, sunniness 15%, wind 8%
+#   daily highs 26%, nightly lows 20%, humidity 11%, rain 20%, sunniness 15%, wind 8%
 # i.e. temperature first (highs above lows), and wind least: it is the least
-# perceptible and least reliable variable. Re-calibrate if features change.
+# perceptible and least reliable variable. Humidity is held below rain and sun: on the
+# vapor pressure scale its gaps come almost all from muggy months, and at 15% it made
+# up 40% or more of the difference for muggy places' matches. Re-calibrate if features change.
 WEIGHTS = {
     "tmax": 1.0,
-    "tmin": 0.837,
-    "dewpoint": 0.417,
-    "ppt": 0.186,
-    "clearness": 0.138,
-    "ws": 0.092,
+    "tmin": 0.844,
+    "dewpoint": 0.398,
+    "ppt": 0.212,
+    "clearness": 0.143,
+    "ws": 0.098,
 }
 VARIANCE_TARGET = 0.99
 
@@ -46,6 +48,16 @@ VARIANCE_TARGET = 0.99
 # 100 mm; the offset keeps dry months alike. With log1p, 2 vs 10 mm (both dry) counts
 # nearly as much as 100 vs 500 mm, ~40% of the precipitation difference among top matches.
 PPT_OFFSET_MM = 15.0
+
+# Humidity (the "dewpoint" feature) is compared as vapor pressure: how humid air feels is
+# about linear in it (humidex and apparent temperature add a fixed amount per hPa). In
+# dewpoint terms 1 hPa is ~0.7 C near 20 C but ~20 C near -30 C, so gaps among air that all
+# feels dry count little. It is also what TerraClimate stores, so its 0.1 kPa rounding
+# weighs the same everywhere. Everything shown to people stays in dewpoint.
+VAP_HPA_PER_KPA = 10.0
+# TerraClimate stores vapor pressure in 0.1 kPa steps, so 0 means "below 0.05 kPa".
+# Use the middle of that bucket (dewpoint about -37 C) rather than zero (or, for dewpoint, log(0)).
+VAP_FLOOR_HPA = 0.25
 
 # Sunniness is the clearness index, surface / top-of-atmosphere solar radiation (~0.75
 # clear, ~0.3 overcast); raw radiation mostly tracks latitude, which temperature already
@@ -57,13 +69,9 @@ DAYS_IN_MONTH = np.array([31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31])
 
 # Identifies the feature definitions above; a saved model must match it to load.
 TRANSFORM = (
-    f"tmax,tmin,dewpoint(vap),log(ppt+{PPT_OFFSET_MM:g}),"
+    f"tmax,tmin,vap(hPa,floor {VAP_FLOOR_HPA:g}),log(ppt+{PPT_OFFSET_MM:g}),"
     f"clearness(srad/toa,blend {CLEARNESS_BLEND_W_M2:g}),ws"
 )
-
-# TerraClimate stores vapor pressure in 0.1 kPa steps, so 0 means "below 0.05 kPa".
-# Use the middle of that bucket (dewpoint about -37 C) rather than log(0).
-VAP_FLOOR_HPA = 0.25
 
 
 @dataclass(frozen=True)
@@ -77,10 +85,14 @@ class RawCodec:
         return np.asarray(raw, dtype=np.float64) * self.scale + self.offset
 
 
+def vapor_pressure_hpa(vap_kpa: np.ndarray) -> np.ndarray:
+    """Vapor pressure (hPa) from TerraClimate's (kPa), with zero at the middle of its lowest step."""
+    return np.maximum(np.asarray(vap_kpa, dtype=np.float64) * VAP_HPA_PER_KPA, VAP_FLOOR_HPA)
+
+
 def dewpoint_c(vap_kpa: np.ndarray) -> np.ndarray:
     """Dewpoint (C) from vapor pressure (kPa), inverting the Magnus formula."""
-    e_hpa = np.maximum(np.asarray(vap_kpa, dtype=np.float64) * 10.0, VAP_FLOOR_HPA)
-    g = np.log(e_hpa / 6.112)
+    g = np.log(vapor_pressure_hpa(vap_kpa) / 6.112)
     return 243.04 * g / (17.625 - g)
 
 
@@ -128,7 +140,7 @@ def perceptual(phys: Mapping[str, np.ndarray]) -> np.ndarray:
     cols = {
         "tmax": phys["tmax"],
         "tmin": phys["tmin"],
-        "dewpoint": phys["dewpoint"],
+        "dewpoint": vapor_pressure_hpa(phys["vap"]),
         "ppt": np.log(np.maximum(phys["ppt"], 0.0) + PPT_OFFSET_MM),
         "clearness": phys["clearness"],
         "ws": phys["ws"],

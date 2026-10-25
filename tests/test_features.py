@@ -13,6 +13,7 @@ from climate_twins.features import (
     toa_radiation,
     physical,
     shift_seasons,
+    vapor_pressure_hpa,
 )
 
 from .conftest import CODECS, World, make_world
@@ -37,6 +38,15 @@ def test_zero_vapor_dewpoint_is_a_finite_floor():
     assert np.all(np.isfinite(d))
     assert d[0] == pytest.approx(-37.3, abs=0.5)
     assert d[1] == d[0]
+
+
+def test_humidity_compares_muggy_gaps_more_than_dry_ones():
+    """The humidity feature is vapor pressure: a 5 C dewpoint gap counts ~6x more at 20-25 C than at -10..-5 C."""
+    vap_kpa = np.array([0.2869, 0.4221, 2.3344, 3.1631])  # dewpoints -10, -5, 20, 25 C
+    assert dewpoint_c(vap_kpa) == pytest.approx([-10, -5, 20, 25], abs=0.01)
+    e = vapor_pressure_hpa(vap_kpa)
+    assert (e[3] - e[2]) / (e[1] - e[0]) == pytest.approx(6.1, abs=0.1)
+    assert vapor_pressure_hpa(np.array([0.0])) > 0  # the floor, as for dewpoint
 
 
 def test_shift_seasons_flat_matches_monthly():
